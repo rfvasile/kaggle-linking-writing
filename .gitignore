@@ -1,0 +1,13 @@
+submission*.csv
+.envrc.local
+.cache/
+.ipynb_checkpoints/
+__pycache__/
+.virtual_documents/
+.ob-jupyter/
+.venv/
+output/.comint-plots/
+*.ipynb
+input/competitions/*
+!input/competitions/README.md
+notes.md

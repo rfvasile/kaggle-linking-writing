@@ -1,0 +1,48 @@
+name: kaggle-local
+
+x-kaggle-common: &kaggle-common
+  working_dir: /kaggle/working
+  environment:
+    PYTHONPATH: /kaggle/working
+  volumes:
+    - .:/kaggle/working
+    - ./input:/kaggle/input:ro
+    - kaggle-cache:/root/.cache
+  ports:
+    - "127.0.0.1:${JUPYTER_PORT:-8888}:8888"
+  shm_size: "${SHM_SIZE:-16gb}"
+  ipc: host
+  command:
+    - bash
+    - -lc
+    - pip install -r /kaggle/working/requirements.txt &&
+      jupyter lab --ip=0.0.0.0 --port=8888 --no-browser --allow-root
+      --ServerApp.root_dir=/kaggle/working --ServerApp.token='' --ServerApp.password=''
+      --ServerApp.allow_origin='*'
+      --MappingKernelManager.cull_idle_timeout=1800
+      --MappingKernelManager.cull_interval=120
+  stdin_open: true
+  tty: true
+
+services:
+  cpu:
+    <<: *kaggle-common
+    profiles: ["cpu"]
+    image: gcr.io/kaggle-images/python:latest
+    container_name: kaggle-notebooks-cpu
+
+  gpu:
+    <<: *kaggle-common
+    profiles: ["gpu"]
+    image: gcr.io/kaggle-gpu-images/python:latest
+    container_name: kaggle-notebooks-gpu
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+
+volumes:
+  kaggle-cache:

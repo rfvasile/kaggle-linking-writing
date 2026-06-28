@@ -1,0 +1,33 @@
+name: upload
+
+on:
+  workflow_dispatch:
+
+jobs:
+  upload:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v2
+      - name: Upload datasets
+        uses: jaimevalero/push-kaggle-dataset@v3
+        env:
+          KAGGLE_USERNAME: ${{ secrets.KAGGLE_USERNAME }}
+          KAGGLE_KEY: ${{ secrets.KAGGLE_KEY }}
+
+        with:
+          id:  "rfvasile/<[TODO]: dataset name>"
+          title: "write from Github"
+          subtitle: "lualualualualua"
+          description: "abcabcabcabcabc"
+          files:  |
+                  *.py
+                  models/*.py
+                  data/*.py
+                  configs/*.py
+                  configs/*.json
+                  scripts/*.py
+                  postprocess/*.py
+                  requirements.txt
+                  requirements_sub.txt
+
+          is_public: true
