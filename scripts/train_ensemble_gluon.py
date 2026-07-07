@@ -1,6 +1,6 @@
 # %%
-from jurigged import watch
 from autogluon.tabular import TabularDataset, TabularPredictor
+from jurigged import watch
 
 # Equivalent of %autoreload
 watch(".")
@@ -31,11 +31,6 @@ predictor = TabularPredictor(
     label="score", learner_kwargs={"ignored_columns": ["Id"]}, path="./models/GBM/"
 ).fit(df_train)
 
-
-# %%
-# Submission
-df_test = TabularDataset("datamount/test_features.csv.gz")
-
-submission = predictor.predict(df_test)
-
-submission.to_csv("output/submission.csv")
+print("--- Training complete ---")
+print("Model load path:")
+print(f"  TabularPredictor.load({predictor.path})")

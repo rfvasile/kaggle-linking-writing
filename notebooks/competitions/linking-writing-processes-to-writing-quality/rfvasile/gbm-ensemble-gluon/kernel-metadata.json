@@ -1,0 +1,18 @@
+{
+  "id": "rfvasile/gbm-ensemble-gluon",
+  "title": "Gbm Ensemble Gluon",
+  "code_file": "gbm-ensemble-gluon.ipynb",
+  "language": "python",
+  "kernel_type": "notebook",
+  "is_private": true,
+  "enable_gpu": false,
+  "enable_tpu": false,
+  "enable_internet": false,
+  "keywords": [],
+  "dataset_sources": [],
+  "competition_sources": [
+    "linking-writing-processes-to-writing-quality"
+  ],
+  "kernel_sources": [],
+  "model_sources": []
+}
