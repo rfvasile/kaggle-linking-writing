@@ -4,10 +4,9 @@
 
 Follow these steps to get started:
 
-1. Get the competition data.
-
 ``` shell
 # Enter the container
+docker compose --profile gpu up
 docker exec -it kaggle-notebooks-gpu /bin/bash
 
 # Download raw data
@@ -17,4 +16,11 @@ bash -c "cd data && unzip -o $COMP.zip && rm $COMP.zip"
 
 # Generate features
 uv run scripts/silver_bullet_feats_v1.py
+
+# Train the GBM model
+uv run scripts/train_ensemble_gluon.py
+
+# Submit the results
+make sync linking-writing-processes-to-writing-quality rfvasile/<notebook-dir>
+kaggle kernels push -p <notebook-dir>
 ```
