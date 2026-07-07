@@ -4,6 +4,7 @@ x-kaggle-common: &kaggle-common
   working_dir: /kaggle/working
   environment:
     PYTHONPATH: /kaggle/working
+    KAGGLE_API_TOKEN: ${KAGGLE_API_TOKEN}
   volumes:
     - .:/kaggle/working
     - ./input:/kaggle/input:ro
