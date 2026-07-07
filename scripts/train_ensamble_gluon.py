@@ -13,7 +13,8 @@ df_train_labels = TabularDataset("data/train_scores.csv")
 df_train_feats = TabularDataset("datamount/train_features.csv.gz")
 
 """
-Cheatsheet: https://pandas.pydata.org/Pandas_Cheat_Sheet.pdf
+# Explanator data analysis
+# - Cheatsheet: https://pandas.pydata.org/Pandas_Cheat_Sheet.pdf
 
 from utils import eda_summary, plot_hist
 
