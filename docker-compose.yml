@@ -11,6 +11,7 @@ x-kaggle-common: &kaggle-common
     - kaggle-cache:/root/.cache
   ports:
     - "127.0.0.1:${JUPYTER_PORT:-8888}:8888"
+    - "127.0.0.1:2718:2718"
   shm_size: "${SHM_SIZE:-16gb}"
   ipc: host
   command:

@@ -3,3 +3,5 @@ kaggle>=2.2.2
 kagglehub>=1.0.1
 jurigged
 autogluon
+marimo
+vegafusion
