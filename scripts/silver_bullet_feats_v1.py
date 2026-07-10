@@ -1,12 +1,14 @@
+# %%
 """File adapted from: https://www.kaggle.com/code/awqatak/silver-bullet-single-model-165-features"""
-
 import re
 import warnings
 
 import numpy as np
 import pandas as pd
 import polars as pl
+from pandas import DataFrame
 from scipy.stats import skew
+from sklearn.model_selection import StratifiedKFold
 
 warnings.filterwarnings("ignore")
 
@@ -216,21 +218,46 @@ def get_keys_pressed_per_second(logs):
     temp_df['keys_per_second'] = temp_df['keys_pressed'] / ((temp_df['max_up_time'] - temp_df['min_down_time']) / 1000)
     return temp_df[['id', 'keys_per_second']]
 
-def make_train_test_features(train_logs_path, test_logs_path):
+def add_extra_columns_essays(essays):
+    return essays[["score", "idx"]]
+
+def add_extra_columns_logs(logs):
+    return logs
+
+def add_fold_columns(scores: DataFrame):
+    print('< Fold Data >')
+    scores = scores.copy()
+    scores["idx"] = np.arange(len(scores))
+
+    y = scores["score"].astype(str)
+    skf = StratifiedKFold(n_splits=12, shuffle=True, random_state=0)
+    scores["fold"] = -1
+    for fold, (_, val_idx) in enumerate(skf.split(scores, y)):
+        scores.loc[val_idx, "fold"] = fold
+
+    return scores[["fold", "idx", "id"]]
+
+
+def make_train_test_features(train_logs_path, train_scores_path, test_logs_path):
     train_logs    = pl.scan_csv(train_logs_path)
     train_feats   = dev_feats(train_logs)
     train_feats   = train_feats.collect().to_pandas()
 
     print('< Training Data >')
     print('< Essay Reconstruction >')
-    train_logs             = train_logs.collect().to_pandas()
-    train_essays           = get_essay_df(train_logs)
-    train_feats            = train_feats.merge(word_feats(train_essays), on='id', how='left')
-    train_feats            = train_feats.merge(sent_feats(train_essays), on='id', how='left')
-    train_feats            = train_feats.merge(parag_feats(train_essays), on='id', how='left')
-    train_feats            = train_feats.merge(get_keys_pressed_per_second(train_logs), on='id', how='left')
-    train_feats            = train_feats.merge(product_to_keys(train_logs, train_essays), on='id', how='left')
+    train_logs              = train_logs.collect().to_pandas()
+    # train_essays            = get_essay_df(train_logs)
+    # train_feats             = train_feats.merge(word_feats(train_essays), on='id', how='left')
+    # train_feats             = train_feats.merge(sent_feats(train_essays), on='id', how='left')
+    # train_feats             = train_feats.merge(parag_feats(train_essays), on='id', how='left')
+    # train_feats             = train_feats.merge(get_keys_pressed_per_second(train_logs), on='id', how='left')
+    # train_feats             = train_feats.merge(product_to_keys(train_logs, train_essays), on='id', how='left')
 
+    train_scores            = pl.scan_csv(train_scores_path).collect().to_pandas()
+    preserved_cols = ['id', 'event_id', 'down_time', 'up_time', 'action_time', 'activity', 'down_event', 'up_event', 'text_change', 'cursor_position', 'word_count']
+    train_feats             = (train_logs[preserved_cols]
+                               .merge(train_scores[['id', 'score']], on='id', how='left')
+                               .merge(add_fold_columns(train_scores), on='id', how='left'))
 
     print('< Testing Data >')
     test_logs   = pl.scan_csv(test_logs_path)
@@ -247,6 +274,6 @@ def make_train_test_features(train_logs_path, test_logs_path):
     return train_feats, test_feats
 
 data_path     = 'data/'
-train_feats, test_feats = make_train_test_features(data_path+'train_logs.csv', data_path+'test_logs.csv')
-train_feats.to_csv("datamount/train_features.csv.gz")
-test_feats.to_csv("datamount/test_features.csv.gz")
+train_feats, test_feats = make_train_test_features(data_path+'train_logs.csv', data_path+'train_scores.csv', data_path+'test_logs.csv')
+train_feats.to_parquet("datamount/train_features.parquet", index=False)
+test_feats.to_parquet("datamount/test_features.parquet", index=False)
