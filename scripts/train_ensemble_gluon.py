@@ -1,4 +1,5 @@
 # %%
+import json
 import subprocess
 
 import pandas as pd
@@ -64,3 +65,6 @@ print(f"OOF RMSE: {root_mean_squared_error.error(df_train['score'], oof)}")
 run_tag = subprocess.check_output(["git", "describe", "--always", "--dirty"], text=True).strip()
 oof_df.to_csv(f"output/{run_tag}_oof.csv", index=False)
 predictor.leaderboard().to_csv(f"output/{run_tag}_leaderboard.csv", index=False)
+
+with open(f"output/{run_tag}_fit_info.json", "w") as f:
+    json.dump(predictor.info(), f, indent=2, default=str)
