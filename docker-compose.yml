@@ -5,6 +5,10 @@ x-kaggle-common: &kaggle-common
   environment:
     PYTHONPATH: /kaggle/working
     KAGGLE_API_TOKEN: ${KAGGLE_API_TOKEN}
+    # This enables using git describe in certain scripts (otherwise yields error)
+    GIT_CONFIG_COUNT: "1"
+    GIT_CONFIG_KEY_0: safe.directory
+    GIT_CONFIG_VALUE_0: /kaggle/working
   volumes:
     - .:/kaggle/working
     - ./input:/kaggle/input:ro

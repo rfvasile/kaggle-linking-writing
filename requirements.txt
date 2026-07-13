@@ -2,6 +2,6 @@ jupytext
 kaggle>=2.2.2
 kagglehub>=1.0.1
 jurigged
-autogluon
+autogluon.tabular[tabarena]==1.5.0
 marimo
 vegafusion

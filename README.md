@@ -14,7 +14,7 @@ export COMP=linking-writing-processes-to-writing-quality
 kaggle competitions download -c $COMP -p data
 bash -c "cd data && unzip -o $COMP.zip && rm $COMP.zip"
 
-# Generate features
+# Generate train/test features in the datamount directory
 uv run scripts/silver_bullet_feats_v1.py
 
 # Train the GBM model
