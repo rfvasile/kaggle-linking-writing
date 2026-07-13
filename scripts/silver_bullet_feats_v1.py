@@ -238,7 +238,7 @@ def add_fold_columns(scores: DataFrame):
     return scores[["fold", "idx", "id"]]
 
 
-def make_train_test_features(train_logs_path, train_scores_path, test_logs_path):
+def make_train_test_features(train_logs_path: str, train_scores_path: str, test_logs_path: str, enable_folds: bool):
     train_logs    = pl.scan_csv(train_logs_path)
     train_feats   = dev_feats(train_logs)
     train_feats   = train_feats.collect().to_pandas()
@@ -246,18 +246,22 @@ def make_train_test_features(train_logs_path, train_scores_path, test_logs_path)
     print('< Training Data >')
     print('< Essay Reconstruction >')
     train_logs              = train_logs.collect().to_pandas()
-    # train_essays            = get_essay_df(train_logs)
-    # train_feats             = train_feats.merge(word_feats(train_essays), on='id', how='left')
-    # train_feats             = train_feats.merge(sent_feats(train_essays), on='id', how='left')
-    # train_feats             = train_feats.merge(parag_feats(train_essays), on='id', how='left')
-    # train_feats             = train_feats.merge(get_keys_pressed_per_second(train_logs), on='id', how='left')
-    # train_feats             = train_feats.merge(product_to_keys(train_logs, train_essays), on='id', how='left')
+    if enable_folds:
+        train_scores            = pl.scan_csv(train_scores_path).collect().to_pandas()
+        preserved_cols = ['id', 'event_id', 'down_time', 'up_time', 'action_time', 'activity', 'down_event', 'up_event', 'text_change', 'cursor_position', 'word_count']
+        train_feats             = (train_logs[preserved_cols]
+                                .merge(train_scores[['id', 'score']], on='id', how='left')
+                                .merge(add_fold_columns(train_scores), on='id', how='left'))
 
-    train_scores            = pl.scan_csv(train_scores_path).collect().to_pandas()
-    preserved_cols = ['id', 'event_id', 'down_time', 'up_time', 'action_time', 'activity', 'down_event', 'up_event', 'text_change', 'cursor_position', 'word_count']
-    train_feats             = (train_logs[preserved_cols]
-                               .merge(train_scores[['id', 'score']], on='id', how='left')
-                               .merge(add_fold_columns(train_scores), on='id', how='left'))
+        # Early return if generating only folds
+        return train_feats, None
+    else:
+        train_essays            = get_essay_df(train_logs)
+        train_feats             = train_feats.merge(word_feats(train_essays), on='id', how='left')
+        train_feats             = train_feats.merge(sent_feats(train_essays), on='id', how='left')
+        train_feats             = train_feats.merge(parag_feats(train_essays), on='id', how='left')
+        train_feats             = train_feats.merge(get_keys_pressed_per_second(train_logs), on='id', how='left')
+        train_feats             = train_feats.merge(product_to_keys(train_logs, train_essays), on='id', how='left')
 
     print('< Testing Data >')
     test_logs   = pl.scan_csv(test_logs_path)
@@ -273,7 +277,11 @@ def make_train_test_features(train_logs_path, train_scores_path, test_logs_path)
     test_feats            = test_feats.merge(product_to_keys(test_logs, test_essays), on='id', how='left')
     return train_feats, test_feats
 
-data_path     = 'data/'
-train_feats, test_feats = make_train_test_features(data_path+'train_logs.csv', data_path+'train_scores.csv', data_path+'test_logs.csv')
-train_feats.to_parquet("datamount/train_features.parquet", index=False)
-test_feats.to_parquet("datamount/test_features.parquet", index=False)
+if __name__ == "__main__":
+    data = "data/"
+    train_feats, test_feats = make_train_test_features(data + 'train_logs.csv', data + 'train_scores.csv', data + 'test_logs.csv', enable_folds=True)
+    train_feats.to_parquet(f"datamount/train_folds.parquet", index=False)
+
+    train_feats, test_feats = make_train_test_features(data + 'train_logs.csv', data + 'train_scores.csv', data + 'test_logs.csv', enable_folds=False)
+    train_feats.to_parquet(f"datamount/train_features.parquet", index=False)
+    test_feats.to_parquet(f"datamount/test_features.parquet", index=False)
