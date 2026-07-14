@@ -1,0 +1,5 @@
+line-length = 120
+
+[lint]
+# I: import sorting (isort-compatible), F401: remove unused imports.
+extend-select = ["I", "F401"]
