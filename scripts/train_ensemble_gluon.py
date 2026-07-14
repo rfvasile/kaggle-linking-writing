@@ -3,8 +3,9 @@ import json
 import subprocess
 
 import pandas as pd
+from autogluon.common.dataset import TabularDataset
 from autogluon.core.metrics import root_mean_squared_error
-from autogluon.tabular import TabularDataset, TabularPredictor
+from autogluon.tabular.predictor.predictor import TabularPredictor
 from jurigged import watch
 
 # Equivalent of %autoreload
@@ -42,7 +43,12 @@ df_train
 # This is mandatory to ensure coherent predictions during blending
 # i.e., when we do 0.6 * model_a + 0.4 * model_b
 predictor = TabularPredictor(
-    label="score", learner_kwargs={"ignored_columns": ["id", "idx"]}, path="./models/GBM/", problem_type="regression", eval_metric="root_mean_squared_error", groups="fold"
+    label="score",
+    learner_kwargs={"ignored_columns": ["id", "idx"]},
+    path="./models/GBM/",
+    problem_type="regression",
+    eval_metric="root_mean_squared_error",
+    groups="fold",
 ).fit(df_train, num_gpus=1, presets="medium")
 
 print("--- Training complete ---")
