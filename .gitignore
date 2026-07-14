@@ -10,4 +10,4 @@ output/.comint-plots/
 *.ipynb
 input/competitions/*
 !input/competitions/README.md
-notes.md
+wandb/
