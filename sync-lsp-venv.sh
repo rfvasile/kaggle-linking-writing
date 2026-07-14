@@ -145,6 +145,11 @@ for ((i = ${#roots[@]} - 1; i >= 0; i--)); do
 done
 copy_source_root "$STDLIB_TMP" "$stdlib_root"
 
+# Fix ty autoimport detection failures
+for dir in "$MIRROR_TMP"/*/; do
+    [[ -e "$dir/__init__.py" || -e "$dir/__init__.pyi" ]] || touch "$dir/__init__.py"
+done
+
 rm -rf "$MIRROR_DIR" "$STDLIB_DIR"
 mv "$MIRROR_TMP" "$MIRROR_DIR"
 mv "$STDLIB_TMP" "$STDLIB_DIR"
