@@ -2,8 +2,6 @@
 
 - Competition link: [Writing Process to Writing Quality](https://www.kaggle.com/competitions/linking-writing-processes-to-writing-quality/overview)
 
-Follow these steps to get started:
-
 ``` shell
 # Enter the container
 docker compose --profile gpu up

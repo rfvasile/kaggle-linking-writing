@@ -21,7 +21,9 @@ x-kaggle-common: &kaggle-common
   command:
     - bash
     - -lc
-    - pip install -r /kaggle/working/requirements.txt &&
+    # Fix permissions, so directories are editable from the host
+    - find /kaggle/working ! -uid 1000 -exec chown 1000:1000 '{}' + ;
+      pip install -r /kaggle/working/requirements.txt &&
       jupyter lab --ip=0.0.0.0 --port=8888 --no-browser --allow-root
       --ServerApp.root_dir=/kaggle/working --ServerApp.token='' --ServerApp.password=''
       --ServerApp.allow_origin='*'
