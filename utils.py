@@ -1,7 +1,10 @@
 import math
+import os
+import random
 
 import matplotlib.pyplot as plt
 import numpy as np
+import torch
 from pandas import DataFrame
 
 
@@ -77,3 +80,13 @@ def plot_hist(dataframe: DataFrame, columns: list[str] | None = None) -> None:
 
     np.asarray(axes).flatten()[0].get_figure().subplots_adjust(hspace=0.6, wspace=0.35)
     plt.show()
+
+
+def set_seed(seed=1234):
+    random.seed(seed)
+    os.environ["PYTHONHASHSEED"] = str(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed(seed)
+    torch.backends.cudnn.deterministic = False
+    torch.backends.cudnn.benchmark = True
