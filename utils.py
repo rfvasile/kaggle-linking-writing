@@ -82,6 +82,17 @@ def plot_hist(dataframe: DataFrame, columns: list[str] | None = None) -> None:
     plt.show()
 
 
+def calc_grad_norm(parameters, norm_type=2.0):
+    """Total gradient norm across parameters; None if there are no grads or the norm is nan/inf."""
+    grads = [p.grad for p in parameters if p.grad is not None]
+    if not grads:
+        return None
+    total_norm = torch.norm(torch.stack([torch.norm(g.detach(), norm_type) for g in grads]), norm_type)
+    if total_norm.isnan() or total_norm.isinf():
+        return None
+    return total_norm
+
+
 def set_seed(seed=1234):
     random.seed(seed)
     os.environ["PYTHONHASHSEED"] = str(seed)

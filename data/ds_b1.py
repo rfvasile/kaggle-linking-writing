@@ -1,5 +1,16 @@
+from types import SimpleNamespace
+
+from pandas import DataFrame
+
+
 class CustomDataset:
-    pass
+    def __init__(self, df: DataFrame, cfg: SimpleNamespace, mode: str):
+        self.df = df
+        self.cfg = cfg
+        self.mode = mode
+
+    def __len__(self):
+        return len(self.df)
 
 
 def tr_collate_fn():
