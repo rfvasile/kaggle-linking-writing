@@ -4,21 +4,20 @@ import glob
 import importlib
 import os
 from argparse import ArgumentParser
-from collections import defaultdict
 from copy import deepcopy
 
 import numpy as np
 import pandas as pd
 import torch
 from jurigged import watch
-from torch.amp import GradScaler, autocast
+from torch.amp import GradScaler
 from torch.optim import AdamW
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 from transformers import get_cosine_schedule_with_warmup
 
 import wandb
-from utils import calc_grad_norm, set_seed
+from utils import set_seed
 
 # Equivalent of %autoreload
 watch(".")
@@ -129,6 +128,36 @@ scaler = GradScaler(device=cfg.device, enabled=cfg.mixed_precision)
 
 # %%
 # Training
+# Training
+# for epoch in epochs:
+#
+#     # ---- TRAIN ----
+#     model.train()
+#     for batch in train_dataloader:
+#         loss = model(batch)                      # forward, under autocast
+#         backward(loss / grad_accumulation)       # scaled by AMP scaler
+#
+#         every grad_accumulation steps:
+#             unscale grads                        # only if clipping or tracking norm
+#             [measure grad norm] [clip]           # optional diagnostics
+#             optimizer.step()                     # via scaler
+#             optimizer.zero_grad()
+#
+#         scheduler.step()                         # per-batch, not per-epoch
+#         log(train losses, lr, grad norms)
+#
+#     # ---- VALIDATE ----  (every eval_epochs, and always on last epoch)
+#     model.eval(), no grads
+#     val_data = collect model outputs over val_dataloader
+#     val_data = concat per-batch outputs into flat tensors
+#     preds    = post_process(val_data)
+#     score    = metric(preds, val_df)
+#     log(score)
+#
+#     # ---- CHECKPOINT ----
+#     save model            # every epoch, unless save_only_last_ckpt
+
+
 cfg.curr_step = 0
 i = 0
 optimizer.zero_grad()

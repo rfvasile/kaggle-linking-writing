@@ -1,6 +1,6 @@
 # Predicting Writing Quality
 
-- Competition link: [Writing Process to Writing Quality](https://www.kaggle.com/competitions/linking-writing-processes-to-writing-quality/overview)
+Competition link: [Writing Process to Writing Quality](https://www.kaggle.com/competitions/linking-writing-processes-to-writing-quality/overview)
 
 ``` shell
 # Enter the container
