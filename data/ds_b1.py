@@ -1,10 +1,12 @@
 from types import SimpleNamespace
+from typing import Literal
 
 from pandas import DataFrame
+from torch.utils.data import Dataset
 
 
-class CustomDataset:
-    def __init__(self, df: DataFrame, cfg: SimpleNamespace, mode: str):
+class CustomDataset(Dataset):
+    def __init__(self, df: DataFrame, cfg: SimpleNamespace, mode: Literal["train", "val"]):
         self.df = df
         self.cfg = cfg
         self.mode = mode

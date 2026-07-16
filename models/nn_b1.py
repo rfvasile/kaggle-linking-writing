@@ -1,4 +1,5 @@
 from types import SimpleNamespace
+from typing import Literal
 
 from torch import nn
 from transformers import AutoConfig, AutoModel
@@ -7,7 +8,7 @@ from data.ds_b1 import CustomDataset
 
 
 class Net(nn.Module):
-    def __init__(self, dataset: CustomDataset, cfg: SimpleNamespace, mode: str):
+    def __init__(self, dataset: CustomDataset, cfg: SimpleNamespace, mode: Literal["train", "val"]):
         super(Net, self).__init__()
 
         self.dataset = dataset

@@ -17,7 +17,7 @@ cfg.output_dir = f"output/{os.path.basename(__file__).split('.')[0]}"
 cfg.pin_memory = False  # ds is small
 cfg.num_workers = 4
 cfg.batch_size = 4
-cfg.train_df = "train_folds.parquet"
+cfg.train_df = "datamount/train_folds.parquet"
 
 # model
 cfg.backbone = "microsoft/deberta-v3-base"
