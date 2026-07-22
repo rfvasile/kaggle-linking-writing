@@ -82,12 +82,14 @@ def plot_hist(dataframe: DataFrame, columns: list[str] | None = None) -> None:
     plt.show()
 
 
-def calc_grad_norm(parameters, norm_type=2.0):
+def calc_grad_norm(parameters, norm_ord=2) -> torch.Tensor | None:
     """Total gradient norm across parameters; None if there are no grads or the norm is nan/inf."""
     grads = [p.grad for p in parameters if p.grad is not None]
     if not grads:
         return None
-    total_norm = torch.norm(torch.stack([torch.norm(g.detach(), norm_type) for g in grads]), norm_type)
+    total_norm = torch.linalg.vector_norm(
+        torch.stack([torch.linalg.vector_norm(g.detach(), norm_ord=norm_ord) for g in grads]), norm_ord=norm_ord
+    )
     if total_norm.isnan() or total_norm.isinf():
         return None
     return total_norm
