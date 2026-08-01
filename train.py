@@ -19,7 +19,6 @@ from tqdm import tqdm
 from transformers import get_cosine_schedule_with_warmup
 
 import wandb
-from train_train import total_grad_norm_after_clip
 from utils import calc_grad_norm, set_seed
 
 # Equivalent of %autoreload
