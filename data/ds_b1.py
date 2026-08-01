@@ -20,7 +20,7 @@ def collate_fn(batch: list[Any]) -> dict[str, Any]:
         batch: the items produced by __getitem__ from the dataset.
 
     Returns:
-        A batch of items of dim. BxFxN.
+        A batch of items of dim: BxTxF.
     """
     global ins
     ins = batch
@@ -46,19 +46,20 @@ val_collate_fn = collate_fn
 
 def batch_to_device(batch: dict[str, Any], device: str):
     """Moves data to a GPU device."""
-    out = {batch[key].to(device) for key in ["input", "idx", "target", "attention_mask"]}
+    out = {key: val.to(device) for key, val in batch.items()}
     return out
 
 
 class CustomDataset(Dataset):
     def __init__(self, df: DataFrame, cfg: SimpleNamespace, mode: Literal["train", "val"]):
-        self.df = df
+        # Indexed by essay so that .loc gathers all the keystroke events of one essay
+        self.df = df.set_index("idx")
         self.cfg = cfg
         self.mode = mode
-        self.indices = df["idx"].unique()
+        self.indices = self.df.index.unique()
 
     def __len__(self):
-        return len(self.df)
+        return len(self.indices)
 
     def __getitem__(self, index: int) -> dict[str, Any]:
         """Prepares a specific dataset item for training.
@@ -70,14 +71,13 @@ class CustomDataset(Dataset):
             Outputs a dictionary with collate function fields.
         """
         global item
-        item = self.df.loc[self.indices[index]]
-        feats = item[
-            [key for key in item.keys() if key not in ["id", "score", "idx"] and not isinstance(item[key], str)]
-        ]
-        g_out = {"input": tensor(feats), "attention_mask": tensor([2]), "idx": tensor([1])}
+        item = self.df.loc[self.indices[index]]  # TxF: one row/event
+        feats = item.select_dtypes("number").drop(columns=["score", "fold"], errors="ignore")
+        g_out = {"input": tensor(feats.to_numpy(dtype="float32")), "attention_mask": tensor([2]), "idx": tensor([1])}
 
         if "score" in item:
-            g_out.update({"target": torch.tensor(item["score"])})
+            # The score is per essay, so it is constant across multiple event
+            g_out.update({"target": torch.tensor(item["score"].iloc[0])})
 
         return g_out
 
