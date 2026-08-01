@@ -52,10 +52,16 @@ def batch_to_device(batch: dict[str, Any], device: str):
 
 class CustomDataset(Dataset):
     def __init__(self, df: DataFrame, cfg: SimpleNamespace, mode: Literal["train", "val"]):
-        # Indexed by essay so that .loc gathers all the keystroke events of one essay
-        self.df = df.set_index("idx")
         self.cfg = cfg
         self.mode = mode
+        # Preserve temporal order of the events via a "stable" sort. This means that .loc resolves
+        # to a slice instead of scanning the whole dataset when checking temporal order:
+        # O(log N) vs O(N))
+        self.df = df.set_index("id", drop=False).sort_index(kind="stable")
+
+        # Working with temporal sequences, so the order must be monotone
+        assert self.df.groupby(level="id")["event_id"].diff().dropna().gt(0).all(), "events out of order"
+        self.ids = self.df["id"].unique()
         self.indices = self.df.index.unique()
 
     def __len__(self):
@@ -68,21 +74,33 @@ class CustomDataset(Dataset):
             index: The index for a specific item.
 
         Returns:
-            Outputs a dictionary with collate function fields.
+            Outputs a dictionary, prepared for the collate function.
         """
         global item
-        item = self.df.loc[self.indices[index]]  # TxF: one row/event
-        feats = item.select_dtypes("number").drop(columns=["score", "fold"], errors="ignore")
-        g_out = {"input": tensor(feats.to_numpy(dtype="float32")), "attention_mask": tensor([2]), "idx": tensor([1])}
+
+        # The index represents a specific essay/user, so the
+        # dimension of the retrieved items is TxF, where T is
+        # the time dimension, while F are the train features.
+        item = self.df.loc[self.indices[index]]
+
+        feats = item[["action_time", "cursor_position", "up_time"]]
+        g_out = {
+            "input": tensor(feats.to_numpy(dtype="float32")),
+            "attention_mask": torch.ones([len(feats)]),
+            "idx": tensor(item["idx"].iloc[0]),  # useful for oof[batch["idx"]] = preds
+        }
 
         if "score" in item:
             # The score is per essay, so it is constant across multiple event
-            g_out.update({"target": torch.tensor(item["score"].iloc[0])})
+            g_out.update({"target": torch.tensor(item["score"].iloc[0], dtype=torch.float32)})
 
         return g_out
 
 
 # TODO
+# import pandas
+# from torch.utils.data import DataLoader
+
 # df = pandas.read_parquet("datamount/train_folds.parquet")
 # cust_ds = CustomDataset(df, SimpleNamespace(**{}), "train")
 # data_loader = DataLoader(cust_ds, batch_size=5, collate_fn=tr_collate_fn)
