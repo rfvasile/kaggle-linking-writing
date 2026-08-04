@@ -61,6 +61,7 @@ class CustomDataset(Dataset):
 
         # Working with temporal sequences, so the order must be monotone
         assert self.df.groupby(level="id")["event_id"].diff().dropna().gt(0).all(), "events out of order"
+
         self.ids = self.df["id"].unique()
         self.indices = self.df.index.unique()
 
@@ -78,9 +79,8 @@ class CustomDataset(Dataset):
         """
         global item
 
-        # The index represents a specific essay/user, so the
-        # dimension of the retrieved items is TxF, where T is
-        # the time dimension, while F are the train features.
+        # The index represents a specific essay/user, so the  dimension of the retrieved
+        # items is TxF, where T is the time dimension, while F are the train features.
         item = self.df.loc[self.indices[index]]
 
         feats = item[["action_time", "cursor_position", "up_time"]]
