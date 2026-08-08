@@ -1,4 +1,5 @@
 # %%
+
 from pandas import DataFrame, read_parquet
 from torch import Tensor
 from torch.nn.utils.rnn import pad_sequence
@@ -106,7 +107,8 @@ print(essay_id, n_events, n_tokens)
 id = df.index.unique()[0]
 
 
-def gen_token_events(essay: str, events: DataFrame) -> DataFrame:
+def _gen_token_events(essay: str, events: DataFrame) -> DataFrame:
+    """Version 1: consider atomic operations (i.e., no composite ones like paste)"""
     input = tokenizer(essay, return_tensors="pt", return_offsets_mapping=True)
     offsets: Tensor = input["offset_mapping"]
 
@@ -129,13 +131,9 @@ def gen_token_events(essay: str, events: DataFrame) -> DataFrame:
 
             continue
 
-        # 1. up_time
+        # Aggregate feastures
         up_time = refs["up_time"].mean()
-
-        # 2. Cursor position
         cur_pos = refs.iloc[-1]["cursor_position"]
-
-        # 3. Action time
         act_time = refs["action_time"].sum()
 
         # Assign new row
@@ -144,8 +142,121 @@ def gen_token_events(essay: str, events: DataFrame) -> DataFrame:
     return DataFrame(rows, columns=events.columns)
 
 
+# %%
+# Improved version which reconstructs the text to account for non-sequential operations
+# i.e., replace, copy, cut, paste, normal insertion.
+# This works by reconstructing the text from the available events, and saving the last
+# event that corresponds to an individual token.
+
+
+def reconstruct_essay(currTextInput):
+    essayText = ""
+    for Input in currTextInput.values:
+        if Input[0] == "Replace":
+            replaceTxt = Input[2].split(" => ")
+            essayText = (
+                essayText[: Input[1] - len(replaceTxt[1])]
+                + replaceTxt[1]
+                + essayText[Input[1] - len(replaceTxt[1]) + len(replaceTxt[0]) :]
+            )
+            continue
+        if Input[0] == "Paste":
+            essayText = essayText[: Input[1] - len(Input[2])] + Input[2] + essayText[Input[1] - len(Input[2]) :]
+            continue
+        if Input[0] == "Remove/Cut":
+            essayText = essayText[: Input[1]] + essayText[Input[1] + len(Input[2]) :]
+            continue
+        if "M" in Input[0]:
+            croppedTxt = Input[0][10:]
+            splitTxt = croppedTxt.split(" To ")
+            valueArr = [item.split(", ") for item in splitTxt]
+            moveData = (
+                int(valueArr[0][0][1:]),
+                int(valueArr[0][1][:-1]),
+                int(valueArr[1][0][1:]),
+                int(valueArr[1][1][:-1]),
+            )
+            if moveData[0] != moveData[2]:
+                if moveData[0] < moveData[2]:
+                    essayText = (
+                        essayText[: moveData[0]]
+                        + essayText[moveData[1] : moveData[3]]
+                        + essayText[moveData[0] : moveData[1]]
+                        + essayText[moveData[3] :]
+                    )
+                else:
+                    essayText = (
+                        essayText[: moveData[2]]
+                        + essayText[moveData[0] : moveData[1]]
+                        + essayText[moveData[2] : moveData[0]]
+                        + essayText[moveData[1] :]
+                    )
+            continue
+        essayText = essayText[: Input[1] - len(Input[2])] + Input[2] + essayText[Input[1] - len(Input[2]) :]
+    return essayText
+
+
+def replay_with_owner(events: DataFrame) -> tuple[str, list[int]]:
+    """Replay the log, carrying a parallel per-character owner array."""
+    text = ""
+    owner: list[int] = []
+
+    cols = events[["activity", "cursor_position", "text_change"]]
+    for i, (activity, cursor, change) in enumerate(cols.itertuples(index=False)):
+        if activity == "Replace":
+            old, new = change.split(" => ")
+            start = cursor - len(new)
+            text = text[:start] + new + text[start + len(old) :]
+            owner = owner[:start] + [i] * len(new) + owner[start + len(old) :]
+        elif activity == "Remove/Cut":
+            text = text[:cursor] + text[cursor + len(change) :]
+            owner = owner[:cursor] + owner[cursor + len(change) :]
+        elif "M" in activity:  # "Move From [a, b] To [c, d]"
+            lhs, rhs = activity[10:].split(" To ")
+            a, b = (int(v.strip("[] ")) for v in lhs.split(", "))
+            c, d = (int(v.strip("[] ")) for v in rhs.split(", "))
+            if a != c:
+                if a < c:
+                    text = text[:a] + text[b:d] + text[a:b] + text[d:]
+                    owner = owner[:a] + owner[b:d] + owner[a:b] + owner[d:]
+                else:
+                    text = text[:c] + text[a:b] + text[c:a] + text[b:]
+                    owner = owner[:c] + owner[a:b] + owner[c:a] + owner[b:]
+        else:  # Input, Paste
+            start = cursor - len(change)
+            text = text[:start] + change + text[start:]
+            owner = owner[:start] + [i] * len(change) + owner[start:]
+
+        assert len(owner) == len(text), f"desync at event {i}: {len(owner)} != {len(text)}"
+
+    return text, owner
+
+
+def gen_token_events(essay: str, events: DataFrame, owner: list[int]) -> DataFrame:
+    enc = tokenizer(essay, return_tensors="pt", return_offsets_mapping=True)
+    rows = []
+    for s, f in enc["offset_mapping"][0].tolist():
+        # Extract overlapping events
+        idx = sorted(set(owner[s:f]))
+
+        if not idx:  # [CLS] / [SEP]
+            rows.append({"up_time": 0, "cursor_position": 0, "action_time": 0, "n_events": 0})
+            continue
+
+        refs = events.iloc[idx]
+        rows.append(
+            {
+                "up_time": refs["up_time"].iloc[-1],  # time at completion
+                "cursor_position": refs["cursor_position"].iloc[-1],  # final position
+                "action_time": refs["action_time"].sum(),  # a duration as a sum
+                "n_events": len(idx),
+            }
+        )
+    return DataFrame(rows)
+
+
 essay = essays.loc[id, "essay"]
-events = df.loc[id][["up_time", "cursor_position", "action_time"]]
+events = df.loc[id][["activity", "cursor_position", "text_change", "up_time", "action_time"]]
 token_events = gen_token_events(essay, events)
 
 input = tokenizer(essay, return_tensors="pt", return_offsets_mapping=True)
