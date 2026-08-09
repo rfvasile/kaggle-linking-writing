@@ -255,9 +255,16 @@ def gen_token_events(essay: str, events: DataFrame, owner: list[int]) -> DataFra
     return DataFrame(rows)
 
 
-essay = essays.loc[id, "essay"]
 events = df.loc[id][["activity", "cursor_position", "text_change", "up_time", "action_time"]]
-token_events = gen_token_events(essay, events)
+events = events[events.activity != "Nonproduction"]
 
-input = tokenizer(essay, return_tensors="pt", return_offsets_mapping=True)
-assert len(token_events) == model(input["input_ids"]).last_hidden_state.shape[1], "Not working"
+text, owner = replay_with_owner(events)
+token_events = gen_token_events(text, events, owner)
+
+assert text == essays.loc[id, "essay"], f"mismatch: {len(text)} vs {len(essays.loc[id, 'essay'])}"
+
+input = tokenizer(text, return_tensors="pt", return_offsets_mapping=True)
+T = model(input["input_ids"]).last_hidden_state.shape[1]
+print(f"events={len(events)} chars={len(text)} tokens={T} rows={len(token_events)}")
+print(token_events.head())
+assert len(token_events) == T, "Not working"
