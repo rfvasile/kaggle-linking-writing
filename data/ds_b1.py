@@ -17,6 +17,9 @@ g_out = None
 model_id = "microsoft/deberta-v3-base"
 tokenizer: DebertaV2TokenizerFast = AutoTokenizer.from_pretrained(model_id)
 
+# Absolute coordinates that don't allow the use of fake values
+COORD_COLS = ["up_time", "cursor_position"]
+
 
 def replay_with_owner(events: DataFrame) -> tuple[str, list[int]]:
     """Replay the log, carrying a parallel per-character owner array."""
@@ -61,8 +64,9 @@ def gen_token_events(essay: str, events: DataFrame, owner: list[int]) -> DataFra
         # Extract overlapping events
         idx = sorted(set(owner[s:f]))
 
-        if not idx:  # [CLS] / [SEP]
-            rows.append({"up_time": 0, "cursor_position": 0, "action_time": 0, "n_events": 0})
+        if not idx:  # [CLS] / [SEP], both mapped to the empty span (0, 0)
+            # action_time/n_events are 0 here. 'up_time' and 'cursor_position' are set to None.
+            rows.append({"up_time": None, "cursor_position": None, "action_time": 0, "n_events": 0})
             continue
 
         refs = events.iloc[idx]
@@ -74,7 +78,12 @@ def gen_token_events(essay: str, events: DataFrame, owner: list[int]) -> DataFra
                 "n_events": len(idx),
             }
         )
-    return DataFrame(rows)
+
+    out = DataFrame(rows)
+
+    # bfill reaches [CLS] from the token below it, ffill reaches [SEP] from the token above.
+    out[COORD_COLS] = out[COORD_COLS].bfill().ffill()
+    return out
 
 
 def collate_fn(batch: list[Any]) -> dict[str, Any]:
@@ -159,6 +168,10 @@ class CustomDataset(Dataset):
         enc = tokenizer(text, return_tensors="pt")
         assert len(token_events) == enc["input_ids"].shape[1], "streams on different grids"
 
+        # The [CLS]/[SEP] rows carry no keystrokes, so they must equal the real token they sit next to
+        edges, neighbours = token_events[COORD_COLS].iloc[[0, -1]], token_events[COORD_COLS].iloc[[1, -2]]
+        assert (edges.to_numpy() == neighbours.to_numpy()).all(), "special-token rows not bracketed"
+
         g_out = {
             "input_sf": tensor(
                 token_events[["action_time", "cursor_position", "up_time"]].to_numpy(dtype="float32")
@@ -175,16 +188,18 @@ class CustomDataset(Dataset):
         return g_out
 
 
-# TODO
-# import pandas
-# from torch.utils.data import DataLoader
+# Smoke Test
+import pandas
+from torch.utils.data import DataLoader
 
-# df = pandas.read_parquet("datamount/train_folds.parquet")
-# cust_ds = CustomDataset(df, SimpleNamespace(**{}), "train")
-# data_loader = DataLoader(cust_ds, batch_size=2, collate_fn=tr_collate_fn)
-# it = iter(data_loader)
-# batch = next(it)
+df = pandas.read_parquet("datamount/train_folds.parquet")
+cust_ds = CustomDataset(df, SimpleNamespace(**{}), "train")
+data_loader = DataLoader(cust_ds, batch_size=2, collate_fn=tr_collate_fn)
+it = iter(data_loader)
+batch = next(it)
+
+self = cust_ds
 
 # print({k: tuple(v.shape) for k, v in batch.items()})
-
-# self = cust_ds
+# print("First: ", tokenizer.convert_ids_to_tokens(cust_ds[0]["input_deb"][:2]))
+# print("Last: ", tokenizer.convert_ids_to_tokens(cust_ds[0]["input_deb"][-2:]))
