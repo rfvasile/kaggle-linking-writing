@@ -170,9 +170,6 @@ class CustomDataset(Dataset):
         assert (edges.to_numpy() == neighbours.to_numpy()).all(), "special-token rows not bracketed"
 
         g_out = {
-            "input_sf2": torch.log1p(
-                tensor(token_events[["action_time", "cursor_position", "up_time"]].to_numpy(dtype="float32"))
-            ),  # squeezeformer: (T,3). Even the distribution via log1p, divisin by 8 for values -> [0,1.9]
             "input_sf": torch.log1p(
                 tensor(token_events[["action_time", "cursor_position", "up_time"]].to_numpy(dtype="float32"))
             )
@@ -210,10 +207,7 @@ FEATS = ["action_time", "cursor_position", "up_time"]
 rows_sf, rows_sf2 = [], []
 for x in cust_ds:
     rows_sf.append(x["input_sf"])
-    rows_sf2.append(x["input_sf2"])
 
 sf = pandas.DataFrame(torch.cat(rows_sf).numpy(), columns=FEATS)
-sf2 = pandas.DataFrame(torch.cat(rows_sf2).numpy(), columns=FEATS)
 
 print(sf.agg(["max", "min", "mean"]))
-print(sf2.agg(["max", "min", "mean"]))
