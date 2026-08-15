@@ -118,6 +118,7 @@ val_dataloader = DataLoader(
 # %%
 # 7. Model, optimizer, scheduler, scaler
 model = Net(dataset=train_dataset, cfg=cfg, mode="train")
+model.to(cfg.device)
 
 optimizer = AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
 scheduler = get_cosine_schedule_with_warmup(

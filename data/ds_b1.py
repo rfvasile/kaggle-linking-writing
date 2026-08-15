@@ -99,12 +99,8 @@ def collate_fn(batch: list[Any]) -> dict[str, Any]:
     ins = batch
 
     out_dict = {
-        "input_sf": pad_sequence(
-            [b["input_sf"] for b in batch], batch_first=True
-        ),  # output: BxTx*, where T is the length of the longest sequence
-        "input_deb": pad_sequence(
-            [b["input_deb"] for b in batch], batch_first=True
-        ),  # output: BxTx*, where T is the length of the longest sequence
+        "input_sf": pad_sequence([b["input_sf"] for b in batch], batch_first=True),  # output: BxTx3
+        "input_deb": pad_sequence([b["input_deb"] for b in batch], batch_first=True),  # output: BxT
         "attention_mask": pad_sequence([b["attention_mask"] for b in batch], batch_first=True),
         "idx": torch.stack([b["idx"] for b in batch]),
     }
@@ -164,6 +160,7 @@ class CustomDataset(Dataset):
 
         text, owner = replay_with_owner(events)
         token_events = gen_token_events(text, events, owner)
+        assert token_events.shape[1] == 4, f"Missmatch: {token_events.shape}"
 
         enc = tokenizer(text, return_tensors="pt")
         assert len(token_events) == enc["input_ids"].shape[1], "streams on different grids"
@@ -175,11 +172,13 @@ class CustomDataset(Dataset):
         g_out = {
             "input_sf": tensor(
                 token_events[["action_time", "cursor_position", "up_time"]].to_numpy(dtype="float32")
-            ),  # squeezeformer input
-            "input_deb": enc["input_ids"][0],  # deberta model input
-            "attention_mask": enc["attention_mask"][0],  # same mask for both
-            "idx": tensor(item["idx"].iloc[0]),  # useful for oof[batch["idx"]] = preds
+            ),  # squeezeformer: (T,3)
+            "input_deb": enc["input_ids"][0],  # deberta: (T)
+            "attention_mask": enc["attention_mask"][0],  # (T)
+            "idx": tensor(item["idx"].iloc[0]),  # needed for oof
         }
+        assert len(g_out["input_sf"].shape) == 2 and g_out["input_sf"].shape[1] == 3
+        assert len(g_out["input_deb"].shape) == 1
 
         if "score" in item:
             # The score is per essay, so it is constant across multiple event
@@ -200,6 +199,6 @@ batch = next(it)
 
 self = cust_ds
 
-# print({k: tuple(v.shape) for k, v in batch.items()})
-# print("First: ", tokenizer.convert_ids_to_tokens(cust_ds[0]["input_deb"][:2]))
-# print("Last: ", tokenizer.convert_ids_to_tokens(cust_ds[0]["input_deb"][-2:]))
+print({k: tuple(v.shape) for k, v in batch.items()})
+print("First: ", tokenizer.convert_ids_to_tokens(cust_ds[0]["input_deb"][:2]))
+print("Last: ", tokenizer.convert_ids_to_tokens(cust_ds[0]["input_deb"][-2:]))
