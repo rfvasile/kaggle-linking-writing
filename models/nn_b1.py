@@ -34,7 +34,6 @@ class Net(nn.Module):
         self.squeezeformer = SqueezeFormer()
         self.fc = nn.Linear(780, 1)
         self.criterion = nn.MSELoss()
-        self.avg_pool = nn.AvgPool1d(3, stride=2)
 
         if self.cfg.gradient_checkpointing:
             self.deberta.gradient_checkpointing_enable()
@@ -60,7 +59,7 @@ class Net(nn.Module):
 
         loss = torch.sqrt(self.criterion(logits, batch["target"]))
 
-        return {"loss": loss, "preds": logits}  # (B,T,F) -> (2,T,F1+F2)
+        return {"loss": loss, "preds": logits}
 
 
 """

@@ -170,9 +170,13 @@ class CustomDataset(Dataset):
         assert (edges.to_numpy() == neighbours.to_numpy()).all(), "special-token rows not bracketed"
 
         g_out = {
-            "input_sf": tensor(
-                token_events[["action_time", "cursor_position", "up_time"]].to_numpy(dtype="float32")
-            ),  # squeezeformer: (T,3)
+            "input_sf2": torch.log1p(
+                tensor(token_events[["action_time", "cursor_position", "up_time"]].to_numpy(dtype="float32"))
+            ),  # squeezeformer: (T,3). Even the distribution via log1p, divisin by 8 for values -> [0,1.9]
+            "input_sf": torch.log1p(
+                tensor(token_events[["action_time", "cursor_position", "up_time"]].to_numpy(dtype="float32"))
+            )
+            / self.cfg.feat_scale,  # squeezeformer: (T,3). Even the distribution via log1p, divisin by 8 ensures vals -> [0.0, 1.9]
             "input_deb": enc["input_ids"][0],  # deberta: (T)
             "attention_mask": enc["attention_mask"][0],  # (T)
             "idx": tensor(item["idx"].iloc[0]),  # needed for oof
@@ -191,14 +195,25 @@ class CustomDataset(Dataset):
 import pandas
 from torch.utils.data import DataLoader
 
+from configs.cfg_b1 import cfg
+
 df = pandas.read_parquet("datamount/train_folds.parquet")
-cust_ds = CustomDataset(df, SimpleNamespace(**{}), "train")
-data_loader = DataLoader(cust_ds, batch_size=2, collate_fn=tr_collate_fn)
+cust_ds = CustomDataset(df, cfg, "train")
+data_loader = DataLoader(cust_ds, batch_size=1, collate_fn=tr_collate_fn)
 it = iter(data_loader)
 batch = next(it)
 
 self = cust_ds
 
-print({k: tuple(v.shape) for k, v in batch.items()})
-print("First: ", tokenizer.convert_ids_to_tokens(cust_ds[0]["input_deb"][:2]))
-print("Last: ", tokenizer.convert_ids_to_tokens(cust_ds[0]["input_deb"][-2:]))
+FEATS = ["action_time", "cursor_position", "up_time"]
+
+rows_sf, rows_sf2 = [], []
+for x in cust_ds:
+    rows_sf.append(x["input_sf"])
+    rows_sf2.append(x["input_sf2"])
+
+sf = pandas.DataFrame(torch.cat(rows_sf).numpy(), columns=FEATS)
+sf2 = pandas.DataFrame(torch.cat(rows_sf2).numpy(), columns=FEATS)
+
+print(sf.agg(["max", "min", "mean"]))
+print(sf2.agg(["max", "min", "mean"]))

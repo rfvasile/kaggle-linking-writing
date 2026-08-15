@@ -9,6 +9,7 @@ cfg.name = os.path.basename(__file__).split(".")[0]
 cfg.seed = 3
 cfg.model = "models.nn_b1"
 cfg.dataset = "data.ds_b1"
+cfg.feat_scale = 8.0
 cfg.post_process_pipeline = "postprocess.pp_b1"
 cfg.metric = "metrics.metric_b1"
 cfg.output_dir = f"output/{os.path.basename(__file__).split('.')[0]}"
