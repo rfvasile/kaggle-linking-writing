@@ -82,3 +82,45 @@ net = Net(dataset=ds, cfg=cfg, mode="train")
 out = net(batch)
 assert len(out["preds"].shape) == 1 and out["preds"].shape[0] == 2, f"Missmatch: {out['preds'].shape}"
 """
+
+
+class FeatureExtractor(nn.Module):
+    """
+    This class projects the in_feats to out_feats, mixing across ksize//2 in the T dim to have invariant T,
+    then ignores padded positions in the batch norm, otherwise padded values would skew the mean and variance.
+    """
+
+    def __init__(self, in_feats: int, out_feats: int, ksize: int):
+        super(FeatureExtractor, self).__init__()
+        assert ksize % 2 == 1
+        self.c1 = nn.Conv1d(in_channels=in_feats, out_channels=out_feats, kernel_size=ksize, padding=(ksize - 1) // 2)
+        self.norm = nn.BatchNorm1d(out_feats)
+
+    def forward(self, batch: Any, mask: Any):
+        """Note that in the mask 1s represent real values and 0s padded values."""
+        # The convolution layer accepts input as BxFxT, but input is BxTxF
+        batch = batch.permute(0, 2, 1)  # BxTxF -> BxFxT
+        out = self.c1(batch)
+        out = out.permute(0, 2, 1)
+
+        # Before normalization, flatten the input and mask padded values
+        # otherwise the padded values bias the output
+        flat_out = out.flatten(0, 1)
+        flat_mask = mask.flatten(0, 1).bool()  # 1s for real positions
+        real_rows = flat_out[flat_mask]
+        normed = self.norm(real_rows)
+
+        # The destination tensor must contain non-zero values in real positions only
+        result = torch.zeros_like(flat_out)
+        result[flat_mask] = normed  # real values at non-zero positions
+        result = result.view(out.shape)
+        return result
+
+
+x = torch.randn(2, 20, 3)  # BxTxF  -> 2,3,20
+mask = torch.ones(2, 20)
+mask[1, 15:] = 0
+
+net = FeatureExtractor(out_feats=256, in_feats=3, ksize=9)
+out = net(x, mask)
+# Note that real_rows.shape = (35, 256) -- 20 real T values for item 0, and 15 for item 1, 5 values are padded
