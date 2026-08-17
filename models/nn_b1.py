@@ -1,4 +1,5 @@
 # %%
+import math
 from types import SimpleNamespace
 from typing import Any, Literal
 
@@ -45,7 +46,7 @@ class Net(nn.Module):
         # Deberta: (B,T) -> (B,T,768)
         out_deb = self.deberta(input_ids=batch["input_deb"], attention_mask=batch["attention_mask"])
 
-        # Squeeze former: (B,T,3) -> (B,T,12)
+        # Squeeze former: (B,T,3) -> (B,T,256)
         out_sq = self.squeezeformer(batch)
 
         # Concatenate
@@ -54,7 +55,7 @@ class Net(nn.Module):
 
         # Pads carry non-zero hidden states, so set them to 0 before summing
         mask = batch["attention_mask"].unsqueeze(-1)  # (B,T) -> (B,T,1)
-        pooled = (composed * mask).sum(dim=1) / mask.sum(dim=1)  # (B,T,1) -> (B,780)
+        pooled = (composed * mask).sum(dim=1) / mask.sum(dim=1)  # (B,T,1024) -> (B,1024)
         logits = self.fc(pooled).squeeze(-1)  # (B,)
 
         loss = torch.sqrt(self.criterion(logits, batch["target"]))
@@ -62,11 +63,10 @@ class Net(nn.Module):
         return {"loss": loss, "preds": logits}
 
 
-"""
 import pandas as pd
-from configs.cfg_b1 import cfg
 from torch.utils.data import DataLoader
 
+from configs.cfg_b1 import cfg
 from data.ds_b1 import CustomDataset, collate_fn
 
 df = pd.read_parquet("datamount/train_folds.parquet")
@@ -77,7 +77,8 @@ batch = next(iter(loader))
 net = Net(dataset=ds, cfg=cfg, mode="train")
 out = net(batch)
 assert len(out["preds"].shape) == 1 and out["preds"].shape[0] == 2, f"Missmatch: {out['preds'].shape}"
-"""
+
+# %%
 
 
 class FeatureExtractor(nn.Module):
@@ -114,9 +115,8 @@ class FeatureExtractor(nn.Module):
         return result
 
 
-"""
 # Feature extractor experiment
-x2 = torch.randn(2, 20, 3)  # BxTxF  -> 2,3,20
+x2 = torch.randn(2, 20, 3)  # BxTxF
 mask = torch.ones(2, 20)
 mask[1, 15:] = 0
 
@@ -124,8 +124,11 @@ net = FeatureExtractor(out_feats=256, in_feats=3, ksize=9)
 out = net(x2, mask)
 # real_rows.shape = (35, 256) -- 20 real T values for item 0, and 15 for item 1, 5 values are padded
 print(out.shape)
-"""
 
+# %%
+# ---------------------
+# ----- Attention -----
+# ---------------------
 # Experiment 1: attention
 x1 = torch.randn(2, 20, 256)
 W_q = nn.Linear(x1.shape[2], 256)
@@ -157,20 +160,88 @@ q2 = W_q(x2)
 k2 = W_k(x2)
 v2 = W_v(x2)
 
-scores2 = q2 @ k2.mT
+scores2 = q2 @ k2.mT  # (BxTx256) x (Bx256xT) -> (BxTxT)
 
-### So the permutations along the T dim. yields values that already exist
-### in the initial tensor. So, set(scores1[0, perm[i]]) == set(scores2[0, i])
+### Permuting the T dim. yields values that already exist in the initial tensor, so
+### set(scores1[0, perm[i]]) == set(scores2[0, i])
 sorted1, _ = torch.sort(scores1[0, perm[0]].flatten())
 sorted2, _ = torch.sort(scores2[0, 0].flatten())
 assert torch.equal(sorted1, sorted2)
 
-### Shows that attention doesn't store any global information about positions
-torch.softmax(scores1, dim=1).sum(dim=1)
+### softmax then sum over the same axis is always 1.0. dim=1 here is the query
+### axis, not the key axis that Attention.forward actually normalizes over.
 torch.softmax(scores1, dim=1).sum(dim=1)
 
+
+# %%
 ## -----------------------------------------------------------------------------
 ## --- add positional embeddings
 ## -----------------------------------------------------------------------------
-## ...
-class
+class Attention(nn.Module):
+    def __init__(self, dim: int, num_heads: int):
+        super(Attention, self).__init__()
+        self.W_q = nn.Linear(dim, dim, bias=False)
+        self.W_k = nn.Linear(dim, dim, bias=False)
+        self.W_v = nn.Linear(dim, dim, bias=False)
+        self.W_o = nn.Linear(dim, dim, bias=False)
+
+        assert dim % num_heads == 0
+        self.dim = dim
+        self.num_heads = num_heads
+        self.head_dim = self.dim // self.num_heads
+
+    def forward(self, batch, mask):
+        """Attention module for the SqueezeFormer.
+
+        Args:
+            batch (B,T,256): input from the FeatureExtractor
+            attention_mask (B,T): 1 = real, 0 = pad
+
+        Returns:
+            Tensor of dimension (B, T, 256)
+        """
+        # Projections: (BxTx256) x (256,256) -> (BxTx256)
+        q = self.W_q(batch)  # what am i looking for
+        k = self.W_k(batch)  # what do i offer (probs sum to 1)
+        v = self.W_v(batch)  # what i actually hand over
+
+        ## Separate input for multi-head attention
+        q = q.view(q.shape[0], q.shape[1], self.num_heads, self.head_dim)  # (B,T,4,64)
+        q = q.permute(0, 2, 1, 3)  # (B,4,T,64)
+
+        k = k.view(k.shape[0], k.shape[1], self.num_heads, self.head_dim)
+        k = k.permute(0, 2, 1, 3)
+
+        v = v.view(v.shape[0], v.shape[1], self.num_heads, self.head_dim)
+        v = v.permute(0, 2, 1, 3)
+
+        # Scores
+        scores = q @ k.mT  # (Bx4xTx64) x (Bx4x64xT) -> (Bx4xTxT) --- (Bx4xqxk)
+        scores = scores / math.sqrt(self.head_dim)  ## keeps softmax out of saturation
+
+        ## Pad must never attend to keys
+        ## Ensure broadcasting works, so: (B,T) -> (B,1,1,T)
+        mask = mask.unsqueeze(dim=-1).unsqueeze(dim=-1).permute(0, 2, 3, 1).to(torch.bool)
+        mask = ~mask.bool()  # masked_fill expectes 1 for padded values
+        ## do not use -inf, under mixed precision row that is filled with -inf softmaxes to NaN
+        scores = scores.masked_fill(mask, torch.finfo(scores.dtype).min)
+
+        # Softmax: T exists for both q and k, but we do softmax over k
+        weights = torch.softmax(scores, dim=3)  # softmax over the keys
+
+        # Weighted sum
+        w_sum = weights @ v  # (Bx4xTxT) x (Bx4xTx64) -> (Bx4xTx64)
+
+        # Heads. Permute first, otherwise reshape merges along the wrong dimension
+        w_sum = w_sum.permute(0, 2, 1, 3).reshape(w_sum.shape[0], w_sum.shape[2], self.dim)  # (B,T,256)
+        out = self.W_o(w_sum)  # (B,T,256) x (256,256)
+
+        return out
+
+
+# Attention smoke test
+attn_mask = torch.ones(2, 20)
+attn_mask[1, 15:] = 0
+batch = torch.rand(2, 20, 256)
+net = Attention(dim=256, num_heads=4)
+net(batch, attn_mask)
