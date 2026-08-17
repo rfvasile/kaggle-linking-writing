@@ -15,7 +15,7 @@ class SqueezeFormer(nn.Module):
         self.nn = nn.Linear(3, 12)
 
     def forward(self, batch: Any) -> dict[str, Any]:
-
+        # input_sf.shape = BxTxF
         output = self.nn(batch["input_sf"])
 
         return output
@@ -32,7 +32,7 @@ class Net(nn.Module):
         config = AutoConfig.from_pretrained(cfg.backbone, **cfg.backbone_cfg)
         self.deberta: DebertaV2Model = AutoModel.from_pretrained(cfg.backbone, config=config)
         self.squeezeformer = SqueezeFormer()
-        self.fc = nn.Linear(780, 1)
+        self.fc = nn.Linear(1024, 1)
         self.criterion = nn.MSELoss()
 
         if self.cfg.gradient_checkpointing:
@@ -50,7 +50,7 @@ class Net(nn.Module):
 
         # Concatenate
         composed = concat((out_deb.last_hidden_state, out_sq), dim=2)
-        assert composed.shape[2] == 780  # 780=768+12
+        assert composed.shape[2] == 1024  # 768+256=1024
 
         # Pads carry non-zero hidden states, so set them to 0 before summing
         mask = batch["attention_mask"].unsqueeze(-1)  # (B,T) -> (B,T,1)
@@ -64,14 +64,10 @@ class Net(nn.Module):
 
 """
 import pandas as pd
+from configs.cfg_b1 import cfg
 from torch.utils.data import DataLoader
 
 from data.ds_b1 import CustomDataset, collate_fn
-
-cfg = SimpleNamespace()
-cfg.backbone = "microsoft/deberta-v3-base"
-cfg.backbone_cfg = {}
-cfg.gradient_checkpointing = False
 
 df = pd.read_parquet("datamount/train_folds.parquet")
 ds = CustomDataset(df=df, cfg=cfg, mode="train")
@@ -93,6 +89,7 @@ class FeatureExtractor(nn.Module):
     def __init__(self, in_feats: int, out_feats: int, ksize: int):
         super(FeatureExtractor, self).__init__()
         assert ksize % 2 == 1
+        # the padding value ensures the T dim preserves size
         self.c1 = nn.Conv1d(in_channels=in_feats, out_channels=out_feats, kernel_size=ksize, padding=(ksize - 1) // 2)
         self.norm = nn.BatchNorm1d(out_feats)
 
@@ -117,10 +114,63 @@ class FeatureExtractor(nn.Module):
         return result
 
 
-x = torch.randn(2, 20, 3)  # BxTxF  -> 2,3,20
+"""
+# Feature extractor experiment
+x2 = torch.randn(2, 20, 3)  # BxTxF  -> 2,3,20
 mask = torch.ones(2, 20)
 mask[1, 15:] = 0
 
 net = FeatureExtractor(out_feats=256, in_feats=3, ksize=9)
-out = net(x, mask)
-# Note that real_rows.shape = (35, 256) -- 20 real T values for item 0, and 15 for item 1, 5 values are padded
+out = net(x2, mask)
+# real_rows.shape = (35, 256) -- 20 real T values for item 0, and 15 for item 1, 5 values are padded
+print(out.shape)
+"""
+
+# Experiment 1: attention
+x1 = torch.randn(2, 20, 256)
+W_q = nn.Linear(x1.shape[2], 256)
+W_k = nn.Linear(x1.shape[2], 256)
+W_v = nn.Linear(x1.shape[2], 256)
+
+## Projections
+q1 = W_q(x1)
+k1 = W_k(x1)
+v1 = W_v(x1)
+
+q1.shape
+q1.T.shape
+k1.shape
+
+## Scores
+scores1 = q1 @ k1.mT  # (2, 20, 256) x (2, 256, 20)
+
+### These fail:
+### scores1 = q1 @ k1  # (2, 20, 256) x (2, 20, 256)
+### scores1 = q1 @ k1.T  # (2, 20, 256) x (256, 20, 2)
+
+### ----
+perm = torch.randperm(x1.shape[1])
+
+x2 = x1[:, perm, :]
+
+q2 = W_q(x2)
+k2 = W_k(x2)
+v2 = W_v(x2)
+
+scores2 = q2 @ k2.mT
+
+### So the permutations along the T dim. yields values that already exist
+### in the initial tensor. So, set(scores1[0, perm[i]]) == set(scores2[0, i])
+sorted1, _ = torch.sort(scores1[0, perm[0]].flatten())
+sorted2, _ = torch.sort(scores2[0, 0].flatten())
+assert torch.equal(sorted1, sorted2)
+
+### Shows that attention doesn't store any global information about positions
+torch.softmax(scores1, dim=1).sum(dim=1)
+torch.softmax(scores1, dim=1).sum(dim=1)
+
+## -----------------------------------------------------------------------------
+## --- add positional embeddings
+## -----------------------------------------------------------------------------
+## ...
+class
