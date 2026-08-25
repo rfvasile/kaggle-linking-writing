@@ -63,6 +63,7 @@ class Net(nn.Module):
         return {"loss": loss, "preds": logits}
 
 
+"""
 import pandas as pd
 from torch.utils.data import DataLoader
 
@@ -77,6 +78,7 @@ batch = next(iter(loader))
 net = Net(dataset=ds, cfg=cfg, mode="train")
 out = net(batch)
 assert len(out["preds"].shape) == 1 and out["preds"].shape[0] == 2, f"Missmatch: {out['preds'].shape}"
+"""
 
 # %%
 
@@ -178,8 +180,9 @@ torch.softmax(scores1, dim=1).sum(dim=1)
 ## --- add positional embeddings
 ## -----------------------------------------------------------------------------
 class Attention(nn.Module):
-    def __init__(self, dim: int, num_heads: int):
+    def __init__(self, dim: int, num_heads: int, cfg: SimpleNamespace):
         super(Attention, self).__init__()
+        self.cfg = cfg
         self.W_q = nn.Linear(dim, dim, bias=False)
         self.W_k = nn.Linear(dim, dim, bias=False)
         self.W_v = nn.Linear(dim, dim, bias=False)
@@ -201,6 +204,7 @@ class Attention(nn.Module):
             Tensor of dimension (B, T, 256)
         """
         # Projections: (BxTx256) x (256,256) -> (BxTx256)
+        T = batch.shape[1]
         q = self.W_q(batch)  # what am i looking for
         k = self.W_k(batch)  # what do i offer (probs sum to 1)
         v = self.W_v(batch)  # what i actually hand over
@@ -216,8 +220,48 @@ class Attention(nn.Module):
         v = v.permute(0, 2, 1, 3)
 
         # Scores
-        scores = q @ k.mT  # (Bx4xTx64) x (Bx4x64xT) -> (Bx4xTxT) --- (Bx4xqxk)
-        scores = scores / math.sqrt(self.head_dim)  ## keeps softmax out of saturation
+        if self.cfg.apply_RoPE:
+
+            def rotation_m(m: int) -> torch.Tensor:
+                dim = self.head_dim
+
+                # cos dim
+                i = torch.tensor([idx for idx in range(1, dim // 2 + 1)])
+                teta = torch.pow(10_000, (-2 * (i - 1) / dim))
+                cos = torch.cos(torch.tensor(m) * teta)
+
+                # sin dim
+                sin = torch.sin(torch.tensor(m) * teta)
+
+                # build R
+                R = torch.zeros(dim * dim).view((dim, dim))
+                for i in range(dim):
+                    R[i, i] = cos[i // 2]
+                    if i % 2 == 0:
+                        R[i, i + 1] = -sin[i // 2]
+                    else:
+                        R[i, i - 1] = sin[i // 2]
+
+                return R
+
+            Rs = []
+            for r in range(T):
+                Rs.append(rotation_m(r))
+
+            # Get rotation matrix
+            R = torch.stack(Rs)  # TxFxF
+            assert self.dim % 2 == 0
+
+            # Rotate k/q via the rotation matrix
+            q_rot = (q.unsqueeze(-1).mT @ R).squeeze(-2)
+            k_rot = (k.unsqueeze(-1).mT @ R).squeeze(-2)
+
+            # Merge the results and calculate the score
+            scores = q_rot @ k_rot.mT
+            scores = scores / math.sqrt(self.head_dim)
+        else:
+            scores = q @ k.mT  # (Bx4xTx64) x (Bx4x64xT) -> (Bx4xTxT) --- (Bx4xqxk)
+            scores = scores / math.sqrt(self.head_dim)  ## keeps softmax out of saturation
 
         ## Pad must never attend to keys
         ## Ensure broadcasting works, so: (B,T) -> (B,1,1,T)
@@ -239,9 +283,21 @@ class Attention(nn.Module):
         return out
 
 
+from configs.cfg_b1 import cfg
+
+cfg.apply_RoPE = True
 # Attention smoke test
 attn_mask = torch.ones(2, 20)
 attn_mask[1, 15:] = 0
 batch = torch.rand(2, 20, 256)
-net = Attention(dim=256, num_heads=4)
+net = Attention(dim=256, num_heads=4, cfg=cfg)
 net(batch, attn_mask)
+
+# --- Rotary embeddings ---
+perm = torch.randperm(20)
+full = torch.ones(2, 20)
+
+# Correctness test: with positional information, the assertion must pass
+assert torch.allclose(net(batch[:, perm, :], full), net(batch, full)[:, perm, :], atol=1e-5) == False, (
+    "If RoPE enabled, this must pass"
+)

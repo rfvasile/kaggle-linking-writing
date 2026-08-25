@@ -9,11 +9,6 @@ from torch.nn.utils.rnn import pad_sequence
 from torch.utils.data import Dataset
 from transformers import AutoTokenizer, DebertaV2TokenizerFast
 
-ins = None
-item = None
-g_out = None
-
-
 model_id = "microsoft/deberta-v3-base"
 tokenizer: DebertaV2TokenizerFast = AutoTokenizer.from_pretrained(model_id)
 
@@ -95,9 +90,6 @@ def collate_fn(batch: list[Any]) -> dict[str, Any]:
     Returns:
         A batch of items of dim: BxTxF.
     """
-    global ins
-    ins = batch
-
     out_dict = {
         "input_sf": pad_sequence([b["input_sf"] for b in batch], batch_first=True),  # output: BxTx3
         "input_deb": pad_sequence([b["input_deb"] for b in batch], batch_first=True),  # output: BxT
@@ -149,8 +141,6 @@ class CustomDataset(Dataset):
         Returns:
             Outputs a dictionary, prepared for the collate function.
         """
-        global item
-
         # The index represents a specific essay/user, so the  dimension of the retrieved
         # items is TxF, where T is the time dimension, while F are the train features.
         item = self.df.loc[self.indices[index]]
@@ -188,6 +178,7 @@ class CustomDataset(Dataset):
         return g_out
 
 
+"""
 # Smoke Test
 import pandas
 from torch.utils.data import DataLoader
@@ -211,3 +202,4 @@ for x in cust_ds:
 sf = pandas.DataFrame(torch.cat(rows_sf).numpy(), columns=FEATS)
 
 print(sf.agg(["max", "min", "mean"]))
+"""
