@@ -179,7 +179,47 @@ torch.softmax(scores1, dim=1).sum(dim=1)
 ## -----------------------------------------------------------------------------
 ## --- add positional embeddings
 ## -----------------------------------------------------------------------------
+
+
+def rotation_slow(m: int, head_dim: int) -> torch.Tensor:
+    """Simplest implementation of the rotation matrix. Reimplements figure 15 from docs/rope.pdf"""
+    d = head_dim
+
+    # The variables used within sin/cos
+    i = torch.tensor([idx for idx in range(1, d // 2 + 1)])
+    theta = torch.pow(10_000, (-2 * (i - 1) / d))
+
+    # the sin/cos inside the rotation matrix
+    cos = torch.cos(torch.tensor(m) * theta)
+    sin = torch.sin(torch.tensor(m) * theta)
+
+    # Build the rotation matrix
+    R = torch.zeros(d * d).view((d, d))
+    for i in range(d):
+        R[i, i] = cos[i // 2]  # diagonal elements
+
+        # off-diagonal elements
+        if i % 2 == 0:
+            R[i, i + 1] = -sin[i // 2]
+        else:
+            R[i, i - 1] = sin[i // 2]
+
+    return R  # (d, d)
+
+
+def rotate_half(x: torch.Tensor) -> torch.Tensor:
+    """Optimized RoPE convetion. It removes the off-diagonal half of the rotation matrix."""
+    # Swap each (2i, 2i+1) pair and negate one member
+    even = x[..., 0::2]
+    odd = x[..., 1::2]
+    return torch.stack((odd, -even), dim=-1).flatten(-2)
+
+
 class Attention(nn.Module):
+    # Fix ty warnings
+    cos: torch.Tensor
+    sin: torch.Tensor
+
     def __init__(self, dim: int, num_heads: int, cfg: SimpleNamespace):
         super(Attention, self).__init__()
         self.cfg = cfg
@@ -192,6 +232,25 @@ class Attention(nn.Module):
         self.dim = dim
         self.num_heads = num_heads
         self.head_dim = self.dim // self.num_heads
+
+        # The variables used within sin/cos
+        d = self.head_dim
+        i = torch.tensor([idx for idx in range(1, d // 2 + 1)])
+        theta = torch.pow(10_000, (-2 * (i - 1) / d))
+
+        # The position between distinct vectors becomes an axis
+        max_length = 12876
+        m_axis = torch.arange(max_length).unsqueeze(-1).to(torch.float32)
+        theta = theta.unsqueeze(0)
+
+        # the sin/cos inside the rotation matrix
+        cos = torch.cos(m_axis @ theta)  # (12876 x head_dim)
+        sin = torch.sin(m_axis @ theta)
+
+        sin = sin.repeat_interleave(2, dim=-1)
+        cos = cos.repeat_interleave(2, dim=-1)
+        self.register_buffer("sin", sin, persistent=False)
+        self.register_buffer("cos", cos, persistent=False)
 
     def forward(self, batch, mask):
         """Attention module for the SqueezeFormer.
@@ -222,39 +281,28 @@ class Attention(nn.Module):
         # Scores
         if self.cfg.apply_RoPE:
 
-            def rotation_m(m: int) -> torch.Tensor:
-                dim = self.head_dim
+            def slow_impl():
+                # Baseline impl
+                Rs = []
+                for r in range(T):
+                    Rs.append(rotation_slow(r, self.head_dim))
 
-                # cos dim
-                i = torch.tensor([idx for idx in range(1, dim // 2 + 1)])
-                teta = torch.pow(10_000, (-2 * (i - 1) / dim))
-                cos = torch.cos(torch.tensor(m) * teta)
-
-                # sin dim
-                sin = torch.sin(torch.tensor(m) * teta)
-
-                # build R
-                R = torch.zeros(dim * dim).view((dim, dim))
-                for i in range(dim):
-                    R[i, i] = cos[i // 2]
-                    if i % 2 == 0:
-                        R[i, i + 1] = -sin[i // 2]
-                    else:
-                        R[i, i - 1] = sin[i // 2]
-
+                ## Get rotation matrix
+                R = torch.stack(Rs)  # TxFxF
                 return R
 
-            Rs = []
-            for r in range(T):
-                Rs.append(rotation_m(r))
+            assert self.head_dim % 2 == 0
 
-            # Get rotation matrix
-            R = torch.stack(Rs)  # TxFxF
-            assert self.dim % 2 == 0
-
-            # Rotate k/q via the rotation matrix
-            q_rot = (q.unsqueeze(-1).mT @ R).squeeze(-2)
-            k_rot = (k.unsqueeze(-1).mT @ R).squeeze(-2)
+            if self.cfg.slow_RoPE:
+                # Straight-forward implementation but slow, costs B*H*T*head_dim**2
+                R = slow_impl()  # TxFxF
+                q_rot = (q.unsqueeze(-1).mT @ R).squeeze(-2)  # (BxHxTx1xF) -> (BxHxTxF)
+                k_rot = (k.unsqueeze(-1).mT @ R).squeeze(-2)
+            else:
+                # Element-wise rotation without creating a rotation matrix
+                cos, sin = self.cos[:T], self.sin[:T]  # (T,head_dim)
+                q_rot = q * cos + rotate_half(q) * sin
+                k_rot = k * cos + rotate_half(k) * sin
 
             # Merge the results and calculate the score
             scores = q_rot @ k_rot.mT
@@ -286,6 +334,7 @@ class Attention(nn.Module):
 from configs.cfg_b1 import cfg
 
 cfg.apply_RoPE = True
+cfg.slow_RoPE = False
 # Attention smoke test
 attn_mask = torch.ones(2, 20)
 attn_mask[1, 15:] = 0
