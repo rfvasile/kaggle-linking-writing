@@ -10,9 +10,7 @@
                                 (shell-command-to-string
                                  "docker ps --filter name=kaggle-notebooks --format '{{.Names}}' 2>/dev/null")))))
                 (format "exec -i -w /kaggle/working -e PYTHONUNBUFFERED=1 -e PYTHONSTARTUP=/kaggle/working/scripts/comint_mpl_show.py %s sh -c \"exec python -i 2>&1\""
-                        (if (and name (string-prefix-p "kaggle-notebooks" name))
-                            name
-                          "kaggle-notebooks-gpu")))))))
+                        (or name "kaggle-notebooks-gpu")))))))
  ;; Rewrite container traceback paths before compile.el opens them.
  (inferior-python-mode
   . ((eval . (let ((root (file-name-as-directory default-directory)))
