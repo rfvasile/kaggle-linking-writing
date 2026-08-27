@@ -1,4 +1,5 @@
 # %%
+from functools import cache
 from types import SimpleNamespace
 from typing import Any, Literal
 
@@ -10,7 +11,13 @@ from torch.utils.data import Dataset
 from transformers import AutoTokenizer, DebertaV2TokenizerFast
 
 model_id = "microsoft/deberta-v3-base"
-tokenizer: DebertaV2TokenizerFast = AutoTokenizer.from_pretrained(model_id)
+
+
+@cache
+def get_tokenizer() -> DebertaV2TokenizerFast:
+    """This file is imported by other modules, so this method avoids creating multiple tokenizers."""
+    return AutoTokenizer.from_pretrained(model_id)
+
 
 # Absolute coordinates that don't allow the use of fake values
 COORD_COLS = ["up_time", "cursor_position"]
@@ -53,7 +60,7 @@ def replay_with_owner(events: DataFrame) -> tuple[str, list[int]]:
 
 
 def gen_token_events(essay: str, events: DataFrame, owner: list[int]) -> DataFrame:
-    enc = tokenizer(essay, return_tensors="pt", return_offsets_mapping=True)
+    enc = get_tokenizer()(essay, return_tensors="pt", return_offsets_mapping=True)
     rows = []
     for s, f in enc["offset_mapping"][0].tolist():
         # Extract overlapping events
@@ -152,7 +159,7 @@ class CustomDataset(Dataset):
         token_events = gen_token_events(text, events, owner)
         assert token_events.shape[1] == 4, f"Missmatch: {token_events.shape}"
 
-        enc = tokenizer(text, return_tensors="pt")
+        enc = get_tokenizer()(text, return_tensors="pt")
         assert len(token_events) == enc["input_ids"].shape[1], "streams on different grids"
 
         # The [CLS]/[SEP] rows carry no keystrokes, so they must equal the real token they sit next to
