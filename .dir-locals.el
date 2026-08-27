@@ -4,13 +4,19 @@
      (python-shell-completion-native-enable . nil)
      ;; Pre-fill `SPC d d' with the Docker debugpy config.
      (dape-command . (docker-python))
-     (eval . (setq-local
-              python-shell-interpreter-args
-              (let ((name (car (split-string
-                                (shell-command-to-string
-                                 "docker ps --filter name=kaggle-notebooks --format '{{.Names}}' 2>/dev/null")))))
+     ;; the container look-up fixes both the REPL as well as the tests
+     (eval . (let ((name (or (car (split-string
+                                   (shell-command-to-string
+                                    "docker ps --filter name=kaggle-notebooks --format '{{.Names}}' 2>/dev/null")))
+                             "kaggle-notebooks-gpu")))
+               (setq-local
+                python-shell-interpreter-args
                 (format "exec -i -w /kaggle/working -e PYTHONUNBUFFERED=1 -e PYTHONSTARTUP=/kaggle/working/scripts/comint_mpl_show.py %s sh -c \"exec python -i 2>&1\""
-                        (or name "kaggle-notebooks-gpu")))))))
+                        name))
+               ;; run pytest in the container.
+               (setq-local
+                python-pytest-executable
+                (format "docker exec -i -w /kaggle/working %s pytest" name))))))
  ;; Rewrite container traceback paths before compile.el opens them.
  (inferior-python-mode
   . ((eval . (let ((root (file-name-as-directory default-directory)))
