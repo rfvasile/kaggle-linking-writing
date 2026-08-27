@@ -1,4 +1,7 @@
+from pathlib import Path
+
 import pandas as pd
+import pytest
 import torch
 from torch import nn
 from torch.utils.data import DataLoader
@@ -88,6 +91,10 @@ def test_attention_rope_experiment():
     )
 
 
+@pytest.mark.skipif(
+    not Path("datamount/train_folds.parquet").exists(),
+    reason="datamount/*.parquet is gitignored, so the file is absent in CI",
+)
 def test_net_experiment():
     df = pd.read_parquet("datamount/train_folds.parquet")
     ds = CustomDataset(df=df, cfg=cfg, mode="train")
