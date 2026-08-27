@@ -24,6 +24,9 @@ cfg.train_df = "datamount/train_folds.parquet"
 cfg.backbone = "microsoft/deberta-v3-base"
 cfg.backbone_cfg = {"attention_probs_dropout_prob": 0.0, "hidden_dropout_prob": 0.0}
 
+## attn controls
+cfg.apply_RoPE = True
+cfg.slow_RoPE = False
 
 # stages
 cfg.train = True

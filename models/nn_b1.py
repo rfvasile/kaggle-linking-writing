@@ -63,26 +63,7 @@ class Net(nn.Module):
         return {"loss": loss, "preds": logits}
 
 
-"""
-import pandas as pd
-from torch.utils.data import DataLoader
-
-from configs.cfg_b1 import cfg
-from data.ds_b1 import CustomDataset, collate_fn
-
-df = pd.read_parquet("datamount/train_folds.parquet")
-ds = CustomDataset(df=df, cfg=cfg, mode="train")
-loader = DataLoader(dataset=ds, collate_fn=collate_fn, batch_size=2)
-batch = next(iter(loader))
-
-net = Net(dataset=ds, cfg=cfg, mode="train")
-out = net(batch)
-assert len(out["preds"].shape) == 1 and out["preds"].shape[0] == 2, f"Missmatch: {out['preds'].shape}"
-"""
-
 # %%
-
-
 class FeatureExtractor(nn.Module):
     """
     This class projects the in_feats to out_feats, mixing across ksize//2 in the T dim to have invariant T,
@@ -115,64 +96,6 @@ class FeatureExtractor(nn.Module):
         result[flat_mask] = normed  # real values at non-zero positions
         result = result.view(out.shape)
         return result
-
-
-# Feature extractor experiment
-x2 = torch.randn(2, 20, 3)  # BxTxF
-mask = torch.ones(2, 20)
-mask[1, 15:] = 0
-
-net = FeatureExtractor(out_feats=256, in_feats=3, ksize=9)
-out = net(x2, mask)
-# real_rows.shape = (35, 256) -- 20 real T values for item 0, and 15 for item 1, 5 values are padded
-print(out.shape)
-
-# %%
-# ---------------------
-# ----- Attention -----
-# ---------------------
-# Experiment 1: attention
-x1 = torch.randn(2, 20, 256)
-W_q = nn.Linear(x1.shape[2], 256)
-W_k = nn.Linear(x1.shape[2], 256)
-W_v = nn.Linear(x1.shape[2], 256)
-
-## Projections
-q1 = W_q(x1)
-k1 = W_k(x1)
-v1 = W_v(x1)
-
-q1.shape
-q1.T.shape
-k1.shape
-
-## Scores
-scores1 = q1 @ k1.mT  # (2, 20, 256) x (2, 256, 20)
-
-### These fail:
-### scores1 = q1 @ k1  # (2, 20, 256) x (2, 20, 256)
-### scores1 = q1 @ k1.T  # (2, 20, 256) x (256, 20, 2)
-
-### ----
-perm = torch.randperm(x1.shape[1])
-
-x2 = x1[:, perm, :]
-
-q2 = W_q(x2)
-k2 = W_k(x2)
-v2 = W_v(x2)
-
-scores2 = q2 @ k2.mT  # (BxTx256) x (Bx256xT) -> (BxTxT)
-
-### Permuting the T dim. yields values that already exist in the initial tensor, so
-### set(scores1[0, perm[i]]) == set(scores2[0, i])
-sorted1, _ = torch.sort(scores1[0, perm[0]].flatten())
-sorted2, _ = torch.sort(scores2[0, 0].flatten())
-assert torch.equal(sorted1, sorted2)
-
-### softmax then sum over the same axis is always 1.0. dim=1 here is the query
-### axis, not the key axis that Attention.forward actually normalizes over.
-torch.softmax(scores1, dim=1).sum(dim=1)
 
 
 # %%
@@ -280,22 +203,16 @@ class Attention(nn.Module):
 
         # Scores
         if self.cfg.apply_RoPE:
+            assert self.head_dim % 2 == 0
 
-            def slow_impl():
-                # Baseline impl
+            if self.cfg.slow_RoPE:
+                # Straight-forward implementation but slow, costs B*H*T*head_dim**2
                 Rs = []
                 for r in range(T):
                     Rs.append(rotation_slow(r, self.head_dim))
 
                 ## Get rotation matrix
                 R = torch.stack(Rs)  # TxFxF
-                return R
-
-            assert self.head_dim % 2 == 0
-
-            if self.cfg.slow_RoPE:
-                # Straight-forward implementation but slow, costs B*H*T*head_dim**2
-                R = slow_impl()  # TxFxF
                 q_rot = (q.unsqueeze(-1).mT @ R).squeeze(-2)  # (BxHxTx1xF) -> (BxHxTxF)
                 k_rot = (k.unsqueeze(-1).mT @ R).squeeze(-2)
             else:
@@ -311,10 +228,9 @@ class Attention(nn.Module):
             scores = q @ k.mT  # (Bx4xTx64) x (Bx4x64xT) -> (Bx4xTxT) --- (Bx4xqxk)
             scores = scores / math.sqrt(self.head_dim)  ## keeps softmax out of saturation
 
-        ## Pad must never attend to keys
-        ## Ensure broadcasting works, so: (B,T) -> (B,1,1,T)
+        ## Pad must never attend to keys: (B,T) -> (B,1,1,T)
         mask = mask.unsqueeze(dim=-1).unsqueeze(dim=-1).permute(0, 2, 3, 1).to(torch.bool)
-        mask = ~mask.bool()  # masked_fill expectes 1 for padded values
+        mask = ~mask.bool()  # masked_fill: 1 for padded values
         ## do not use -inf, under mixed precision row that is filled with -inf softmaxes to NaN
         scores = scores.masked_fill(mask, torch.finfo(scores.dtype).min)
 
@@ -329,24 +245,3 @@ class Attention(nn.Module):
         out = self.W_o(w_sum)  # (B,T,256) x (256,256)
 
         return out
-
-
-from configs.cfg_b1 import cfg
-
-cfg.apply_RoPE = True
-cfg.slow_RoPE = False
-# Attention smoke test
-attn_mask = torch.ones(2, 20)
-attn_mask[1, 15:] = 0
-batch = torch.rand(2, 20, 256)
-net = Attention(dim=256, num_heads=4, cfg=cfg)
-net(batch, attn_mask)
-
-# --- Rotary embeddings ---
-perm = torch.randperm(20)
-full = torch.ones(2, 20)
-
-# Correctness test: with positional information, the assertion must pass
-assert torch.allclose(net(batch[:, perm, :], full), net(batch, full)[:, perm, :], atol=1e-5) == False, (
-    "If RoPE enabled, this must pass"
-)
