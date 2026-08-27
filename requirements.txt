@@ -5,3 +5,4 @@ jurigged
 autogluon.tabular[tabarena]==1.6.1
 marimo
 vegafusion
+transformers>=5.16.1
