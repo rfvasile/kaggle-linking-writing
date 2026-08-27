@@ -176,30 +176,3 @@ class CustomDataset(Dataset):
             g_out.update({"target": torch.tensor(item["score"].iloc[0], dtype=torch.float32)})
 
         return g_out
-
-
-"""
-# Smoke Test
-import pandas
-from torch.utils.data import DataLoader
-
-from configs.cfg_b1 import cfg
-
-df = pandas.read_parquet("datamount/train_folds.parquet")
-cust_ds = CustomDataset(df, cfg, "train")
-data_loader = DataLoader(cust_ds, batch_size=1, collate_fn=tr_collate_fn)
-it = iter(data_loader)
-batch = next(it)
-
-self = cust_ds
-
-FEATS = ["action_time", "cursor_position", "up_time"]
-
-rows_sf, rows_sf2 = [], []
-for x in cust_ds:
-    rows_sf.append(x["input_sf"])
-
-sf = pandas.DataFrame(torch.cat(rows_sf).numpy(), columns=FEATS)
-
-print(sf.agg(["max", "min", "mean"]))
-"""
