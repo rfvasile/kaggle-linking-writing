@@ -1,9 +1,14 @@
 # pyright: reportMissingImports=false
-# PYTHONSTARTUP shim for the Docker comint REPL. `plt.show()` saves figures and
-# prints markers consumed by the Emacs image bridge.
+# PYTHONSTARTUP shim for the Docker comint REPL: `plt.show()` saves figures and prints markers
+# for the Emacs image bridge, and readline gets a completer python.el can parse.
 import glob
+import io
 import os
+import re
+import readline
+import rlcompleter
 import time
+from contextlib import redirect_stderr, redirect_stdout
 
 import matplotlib
 
@@ -38,3 +43,35 @@ def _show(*_args, **_kwargs):
 
 
 _plt.show = _show
+
+
+# rlcompleter probes `getattr(obj, name)` on every candidate: on a torch Tensor `.volatile`
+# warns into python.el's completion stream and `.imag` raises, so `t.<TAB>` yields nothing.
+class _QuietCompleter(rlcompleter.Completer):
+    def attr_matches(self, text):
+        sink = io.StringIO()
+        with redirect_stdout(sink), redirect_stderr(sink):
+            try:
+                return super().attr_matches(text)
+            except Exception:
+                return self._dir_matches(text)
+
+    def _dir_matches(self, text):
+        """Match on `dir()` alone, reading no attribute off the object; callables lose their "(" postfix."""
+        match = re.match(r"(\w+(\.\w+)*)\.(\w*)", text)
+        if not match:
+            return []
+        expr, attr = match.group(1, 3)
+        try:
+            obj = eval(expr, self.namespace)
+        except Exception:
+            return []
+        # rlcompleter's rule: hide privates until the prefix asks for them.
+        hidden = "_" if attr == "" else "__" if attr == "_" else None
+        return sorted(
+            f"{expr}.{name}" for name in dir(obj) if name.startswith(attr) and not (hidden and name.startswith(hidden))
+        )
+
+
+# `site` runs its readline hook after PYTHONSTARTUP, but its `import rlcompleter` is a no-op by then.
+readline.set_completer(_QuietCompleter().complete)
