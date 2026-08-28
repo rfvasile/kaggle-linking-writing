@@ -3,64 +3,23 @@ import math
 from types import SimpleNamespace
 from typing import Any, Literal
 
+import pandas as pd
 import torch
-from torch import concat, nn
+from jurigged import watch
+from torch import Tensor, concat, nn
+from torch.utils.data import DataLoader
 from transformers import AutoConfig, AutoModel, DebertaV2Model
 
+from configs.cfg_b1 import cfg
 from data.ds_b1 import CustomDataset
 
+# Equivalent of %autoreload
+watch(".")
 
-class SqueezeFormer(nn.Module):
-    def __init__(self):
-        super(SqueezeFormer, self).__init__()
-        self.nn = nn.Linear(3, 12)
-
-    def forward(self, batch: Any) -> dict[str, Any]:
-        # input_sf.shape = BxTxF
-        output = self.nn(batch["input_sf"])
-
-        return output
-
-
-class Net(nn.Module):
-    def __init__(self, dataset: CustomDataset, cfg: SimpleNamespace, mode: Literal["train", "val"]):
-        super(Net, self).__init__()
-
-        self.dataset = dataset
-        self.cfg = cfg
-        self.mode = mode
-
-        config = AutoConfig.from_pretrained(cfg.backbone, **cfg.backbone_cfg)
-        self.deberta: DebertaV2Model = AutoModel.from_pretrained(cfg.backbone, config=config)
-        self.squeezeformer = SqueezeFormer()
-        self.fc = nn.Linear(1024, 1)
-        self.criterion = nn.MSELoss()
-
-        if self.cfg.gradient_checkpointing:
-            self.deberta.gradient_checkpointing_enable()
-
-    def len(self) -> int:
-        return len(self.dataset)
-
-    def forward(self, batch: Any) -> dict[str, Any]:
-        # Deberta: (B,T) -> (B,T,768)
-        out_deb = self.deberta(input_ids=batch["input_deb"], attention_mask=batch["attention_mask"])
-
-        # Squeeze former: (B,T,3) -> (B,T,256)
-        out_sq = self.squeezeformer(batch)
-
-        # Concatenate
-        composed = concat((out_deb.last_hidden_state, out_sq), dim=2)
-        assert composed.shape[2] == 1024  # 768+256=1024
-
-        # Pads carry non-zero hidden states, so set them to 0 before summing
-        mask = batch["attention_mask"].unsqueeze(-1)  # (B,T) -> (B,T,1)
-        pooled = (composed * mask).sum(dim=1) / mask.sum(dim=1)  # (B,T,1024) -> (B,1024)
-        logits = self.fc(pooled).squeeze(-1)  # (B,)
-
-        loss = torch.sqrt(self.criterion(logits, batch["target"]))
-
-        return {"loss": loss, "preds": logits}
+mode = "train"
+ds = pd.read_parquet("datamount/train_folds5.parquet")
+dsw = CustomDataset(ds, cfg, mode=mode)
+dsl: DataLoader = DataLoader(dsw)
 
 
 # %%
@@ -77,8 +36,14 @@ class FeatureExtractor(nn.Module):
         self.c1 = nn.Conv1d(in_channels=in_feats, out_channels=out_feats, kernel_size=ksize, padding=(ksize - 1) // 2)
         self.norm = nn.BatchNorm1d(out_feats)
 
-    def forward(self, batch: Any, mask: Any):
-        """Note that in the mask 1s represent real values and 0s padded values."""
+    def forward(self, batch: Tensor, mask: Any):
+        """
+        Args:
+            batch (BxTx3): the event-derived input features
+            mask (BxT): mask extracted from the tokenizer
+
+        Note:
+            The 1s in the mask represent real values and 0s padded values."""
         # The convolution layer accepts input as BxFxT, but input is BxTxF
         batch = batch.permute(0, 2, 1)  # BxTxF -> BxFxT
         out = self.c1(batch)
@@ -95,7 +60,7 @@ class FeatureExtractor(nn.Module):
         result = torch.zeros_like(flat_out)
         result[flat_mask] = normed  # real values at non-zero positions
         result = result.view(out.shape)
-        return result
+        return result  # BxTxout_feats
 
 
 # %%
@@ -144,6 +109,12 @@ class Attention(nn.Module):
     sin: torch.Tensor
 
     def __init__(self, dim: int, num_heads: int, cfg: SimpleNamespace):
+        """
+        Args:
+            dim: the feature dimension (e.g., 256)
+            num_heads: the number of parallel streams to process (e.g., 4)
+            cfg: the experiment config
+        """
         super(Attention, self).__init__()
         self.cfg = cfg
         self.W_q = nn.Linear(dim, dim, bias=False)
@@ -175,7 +146,7 @@ class Attention(nn.Module):
         self.register_buffer("sin", sin, persistent=False)
         self.register_buffer("cos", cos, persistent=False)
 
-    def forward(self, batch, mask):
+    def forward(self, batch, attn_mask):
         """Attention module for the SqueezeFormer.
 
         Args:
@@ -229,10 +200,10 @@ class Attention(nn.Module):
             scores = scores / math.sqrt(self.head_dim)  ## keeps softmax out of saturation
 
         ## Pad must never attend to keys: (B,T) -> (B,1,1,T)
-        mask = mask.unsqueeze(dim=-1).unsqueeze(dim=-1).permute(0, 2, 3, 1).to(torch.bool)
-        mask = ~mask.bool()  # masked_fill: 1 for padded values
+        attn_mask = attn_mask.unsqueeze(dim=-1).unsqueeze(dim=-1).permute(0, 2, 3, 1).to(torch.bool)
+        attn_mask = ~attn_mask.bool()  # masked_fill: 1 for padded values
         ## do not use -inf, under mixed precision row that is filled with -inf softmaxes to NaN
-        scores = scores.masked_fill(mask, torch.finfo(scores.dtype).min)
+        scores = scores.masked_fill(attn_mask, torch.finfo(scores.dtype).min)
 
         # Softmax: T exists for both q and k, but we do softmax over k
         weights = torch.softmax(scores, dim=3)  # softmax over the keys
@@ -245,3 +216,72 @@ class Attention(nn.Module):
         out = self.W_o(w_sum)  # (B,T,256) x (256,256)
 
         return out
+
+
+# %%
+
+
+class SqueezeFormer(nn.Module):
+    def __init__(self, cfg: SimpleNamespace):
+        super(SqueezeFormer, self).__init__()
+        self.attn = Attention(dim=cfg.feat_dim, num_heads=cfg.num_heads, cfg=cfg)
+        self.feats_extractor = FeatureExtractor(in_feats=cfg.in_feats, out_feats=cfg.out_feats, ksize=cfg.ksize)
+
+    def forward(self, feats: Tensor, attention_mask: Tensor) -> dict[str, Any]:
+
+        # Stem: (BxTx3) -> (BxTx256)
+        out = self.feats_extractor(feats, attention_mask)
+
+        # (BxTx256) -> (BxTx256)
+        output = self.attn(out, attention_mask)
+
+        return output
+
+
+# %%
+
+
+class Net(nn.Module):
+    def __init__(self, dataset: CustomDataset, cfg: SimpleNamespace, mode: Literal["train", "val"]):
+        super(Net, self).__init__()
+
+        self.dataset = dataset
+        self.cfg = cfg
+        self.mode = mode
+
+        config = AutoConfig.from_pretrained(cfg.backbone, **cfg.backbone_cfg)
+        self.deberta: DebertaV2Model = AutoModel.from_pretrained(cfg.backbone, config=config)
+        self.squeezeformer = SqueezeFormer(cfg)
+        self.fc = nn.Linear(1024, 1)
+        self.criterion = nn.MSELoss()
+
+        if self.cfg.gradient_checkpointing:
+            self.deberta.gradient_checkpointing_enable()
+
+    def len(self) -> int:
+        return len(self.dataset)
+
+    def forward(self, batch: Any) -> dict[str, Any]:
+        """
+        Args:
+            batch: a tensor with the data
+            attn_mask: decides what to attend to. 1s for real values, 0s for padding
+        """
+        # Deberta: (B,T) -> (B,T,768)
+        out_deb = self.deberta(input_ids=batch["input_deb"], attention_mask=batch["attention_mask"])
+
+        # Squeeze former: (B,T,3) -> (B,T,256)
+        out_sq = self.squeezeformer(feats=batch["input_sf"], attention_mask=batch["attention_mask"])
+
+        # Concatenate
+        composed = concat((out_deb.last_hidden_state, out_sq), dim=2)
+        assert composed.shape[2] == 1024  # 768+256=1024
+
+        # Pads carry non-zero hidden states, so set them to 0 before summing
+        mask = batch["attention_mask"].unsqueeze(-1)  # (B,T) -> (B,T,1)
+        pooled = (composed * mask).sum(dim=1) / mask.sum(dim=1)  # (B,T,1024) -> (B,1024)
+        logits = self.fc(pooled).squeeze(-1)  # (B,)
+
+        loss = torch.sqrt(self.criterion(logits, batch["target"]))
+
+        return {"loss": loss, "preds": logits}

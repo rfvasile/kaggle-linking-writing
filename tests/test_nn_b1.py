@@ -1,3 +1,4 @@
+# %%
 from pathlib import Path
 
 import pandas as pd
@@ -8,7 +9,34 @@ from torch.utils.data import DataLoader
 
 from configs.cfg_b1 import cfg
 from data.ds_b1 import CustomDataset, collate_fn
-from models.nn_b1 import Attention, FeatureExtractor, Net
+from models.nn_b1 import Attention, FeatureExtractor, Net, SqueezeFormer
+
+mode = "train"
+
+if not Path("datamount/train_folds_test.parquet").exists():
+    df = pd.read_parquet("datamount/train_folds.parquet")
+    df.head(5).to_parquet("datamount/train_folds5.parquet")
+
+
+@pytest.fixture
+def dsl():
+    ds = pd.read_parquet("datamount/train_folds5.parquet")
+    dsw = CustomDataset(ds, cfg, mode=mode)
+    dsl = DataLoader(dsw)
+    return dsl
+
+
+def test_net_forward(dsl: DataLoader):
+    batch = next(iter(dsl))
+    net = Net(batch, cfg, mode=mode)
+    out = net(batch)
+    assert out.shape == 3 and out.shape[2] == 256
+
+
+def test_sf_forward(dsl: DataLoader):
+    batch = next(iter(dsl))
+    net = SqueezeFormer(cfg)
+    out = net(batch)
 
 
 def test_feature_extractor_experiment():
