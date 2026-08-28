@@ -221,6 +221,84 @@ class Attention(nn.Module):
 # %%
 
 
+class AttentionBlock(nn.Module):
+    def __init__(self, in_feats: int, out_feats: int, ksize: int):
+        super(AttentionBlock, self).__init__()
+        self.in_feats = in_feats
+        self.out_feats = out_feats
+
+        self.attn: Attention = Attention(dim=cfg.feat_dim, num_heads=cfg.num_heads, cfg=cfg)
+        self.fc1 = nn.Linear(in_feats, out_feats)
+        self.fc2 = nn.Linear(in_feats, out_feats)
+        self.conv = nn.Conv1d(in_channels=in_feats, out_channels=out_feats, kernel_size=ksize, padding=(ksize - 1) // 2)
+
+    def forward(self, feats: Tensor, attn_mask: Tensor) -> Tensor:
+        """
+        Args:
+            feats (BxTx256): feature extractor output
+            attn_mask (BxT): obtained from the tokenizer
+
+        Return:
+            out (BxTx256): padded values are zeroed out
+        """
+        B, T, _ = feats.shape
+
+        out = self.attn(feats, attn_mask=attn_mask)
+        assert out.shape == (B, T, self.in_feats)
+
+        out = self.fc1(out)
+
+        attn_mask = attn_mask.unsqueeze(-1)
+        out = out * attn_mask
+
+        out = out.permute(0, 2, 1)
+        assert out.shape == (B, self.out_feats, T)
+
+        out = self.conv(out)
+        out = out.permute(0, 2, 1)
+        assert out.shape == (B, T, self.out_feats)
+
+        out = self.fc2(out)
+        assert out.shape == (B, T, self.out_feats)
+
+        # Zero-out positions under the mask
+        flat_out = out.flatten(0, 1)
+        flat_mask = attn_mask.flatten(0, 2).bool()
+        real_rows = flat_out[flat_mask]
+
+        result = torch.zeros_like(flat_out)
+        result[flat_mask] = real_rows
+        result = result.view(out.shape)
+        return result
+
+
+x = torch.rand(2, 10, 256)
+mask = torch.ones(2, 10)
+mask[1, 8:] = 0
+blk = AttentionBlock(in_feats=256, out_feats=256, ksize=9)
+
+# 1. shape
+a1 = blk(x, mask)
+assert a1.shape == (2, 10, 256)
+
+# 2. pading: real positions unmoved, and pads positions clean
+x2 = x.clone()
+x2[1, 8:] *= 100
+a2 = blk(x2, mask)
+assert a1.shape == (2, 10, 256)
+assert (a1[1, :8] - a2[1, :8]).abs().sum() == 0, "Outputs differing only at masked positions must have zero distance"
+assert a1[1, 8:].abs().sum() == 0, "Masked output padding positions must be 0"
+
+# 3. positional sensitivity
+perm = torch.randperm(10)
+full = torch.ones(2, 10)
+assert not torch.allclose(blk(x[:, perm], full), blk(x, full)[:, perm], atol=1e-5), (
+    "Permuted inputs/outputs must not match due to positional information"
+)
+
+# %%
+
+
 class SqueezeFormer(nn.Module):
     def __init__(self, cfg: SimpleNamespace):
         super(SqueezeFormer, self).__init__()

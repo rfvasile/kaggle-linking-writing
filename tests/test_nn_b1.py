@@ -9,7 +9,7 @@ from torch.utils.data import DataLoader
 
 from configs.cfg_b1 import cfg
 from data.ds_b1 import CustomDataset, collate_fn
-from models.nn_b1 import Attention, FeatureExtractor, Net, SqueezeFormer
+from models.nn_b1 import Attention, AttentionBlock, FeatureExtractor, Net, SqueezeFormer
 
 mode = "train"
 
@@ -116,6 +116,24 @@ def test_attention_rope_experiment():
     # Correctness test: with positional information, the assertion must pass
     assert torch.allclose(net(batch[:, perm, :], full), net(batch, full)[:, perm, :], atol=1e-5) == False, (
         "If RoPE enabled, this must pass"
+    )
+
+
+def test_attention_mask_invariance_with_extractor():
+    batch = torch.rand((2, 10, 3))
+    mask = torch.ones((2, 10))
+    extr = FeatureExtractor(in_feats=3, out_feats=256, ksize=9)
+
+    mask[1, 8:] = 0
+    out = extr(batch, mask)
+
+    attn = AttentionBlock(in_feats=256, out_feats=256, ksize=9)
+    a1 = attn(out, mask)
+
+    out[1, 8:] *= 100
+    a2 = attn(out, mask)
+    assert torch.abs(a1[1, :8] - a2[1, :8]).sum() == 0, (
+        "The absolute distance between 2 outputs should be 0 if they differ only at masked positions"
     )
 
 
