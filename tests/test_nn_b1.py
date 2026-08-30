@@ -137,6 +137,34 @@ def test_attention_mask_invariance_with_extractor():
     )
 
 
+def test_attention_block():
+    x = torch.rand(2, 10, 256)
+    mask = torch.ones(2, 10)
+    mask[1, 8:] = 0
+    blk = AttentionBlock(in_feats=256, out_feats=256, ksize=9)
+
+    # 1. shape
+    a1 = blk(x, mask)
+    assert a1.shape == (2, 10, 256)
+
+    # 2. pading: real positions unmoved, and pads positions clean
+    x2 = x.clone()
+    x2[1, 8:] *= 100
+    a2 = blk(x2, mask)
+    assert a1.shape == (2, 10, 256)
+    assert (a1[1, :8] - a2[1, :8]).abs().sum() == 0, (
+        "Outputs differing only at masked positions must have zero distance"
+    )
+    assert a1[1, 8:].abs().sum() == 0, "Masked output padding positions must be 0"
+
+    # 3. positional sensitivity
+    perm = torch.randperm(10)
+    full = torch.ones(2, 10)
+    assert not torch.allclose(blk(x[:, perm], full), blk(x, full)[:, perm], atol=1e-5), (
+        "Permuted inputs/outputs must not match due to positional information"
+    )
+
+
 @pytest.mark.skipif(
     not Path("datamount/train_folds.parquet").exists(),
     reason="datamount/*.parquet is gitignored, so the file is absent in CI",
