@@ -12,6 +12,7 @@ from transformers import AutoConfig, AutoModel, DebertaV2Model
 
 from configs.cfg_b1 import cfg
 from data.ds_b1 import CustomDataset
+from models.squeezeformer import ConvModule, FeedForwardModule, make_scale
 from models.squeezeformer.model import Squeezeformer
 
 # Equivalent of %autoreload
@@ -271,6 +272,106 @@ class AttentionBlock(nn.Module):
         result[flat_mask] = real_rows
         result = result.view(out.shape)
         return result
+
+
+# %%
+
+
+class SqueezeformerBlock(nn.Module):
+    """MHSA -> FF -> Conv -> FF, each in a residual carrying a learned scale/bias.
+
+    Ported from `mdl_dh_05s3a.py:442-557`. The reference threads `cos`/`sin` through
+    `forward` because its `LlamaAttention` takes them injected; our `Attention` owns its
+    own RoPE tables, so those arguments are gone.
+
+    Inputs:
+        x (batch, time, dim): feature-extractor output.
+        mask (batch, time): 1 at real positions.
+    Outputs:
+        (batch, time, dim), pad rows carried through unnormalised.
+    """
+
+    def __init__(
+        self,
+        cfg: SimpleNamespace,
+        encoder_dim: int = 256,
+        num_attention_heads: int = 4,
+        feed_forward_expansion_factor: int = 1,
+        conv_expansion_factor: int = 2,
+        feed_forward_dropout_p: float = 0.0,
+        conv_dropout_p: float = 0.0,
+        conv_kernel_size: int = 31,
+    ) -> None:
+        super(SqueezeformerBlock, self).__init__()
+
+        self.scale_mhsa, self.bias_mhsa = make_scale(encoder_dim)
+        self.scale_ff_mhsa, self.bias_ff_mhsa = make_scale(encoder_dim)
+        self.scale_conv, self.bias_conv = make_scale(encoder_dim)
+        self.scale_ff_conv, self.bias_ff_conv = make_scale(encoder_dim)
+
+        self.mhsa = Attention(dim=encoder_dim, num_heads=num_attention_heads, cfg=cfg)
+        self.ln_mhsa = nn.LayerNorm(encoder_dim)
+        self.ff_mhsa = FeedForwardModule(
+            encoder_dim=encoder_dim,
+            expansion_factor=feed_forward_expansion_factor,
+            dropout_p=feed_forward_dropout_p,
+        )
+        self.ln_ff_mhsa = nn.LayerNorm(encoder_dim)
+
+        self.conv = ConvModule(
+            in_channels=encoder_dim,
+            kernel_size=conv_kernel_size,
+            expansion_factor=conv_expansion_factor,
+            dropout_p=conv_dropout_p,
+        )
+        self.ln_conv = nn.LayerNorm(encoder_dim)
+        self.ff_conv = FeedForwardModule(
+            encoder_dim=encoder_dim,
+            expansion_factor=feed_forward_expansion_factor,
+            dropout_p=feed_forward_dropout_p,
+        )
+        self.ln_ff_conv = nn.LayerNorm(encoder_dim)
+
+    def forward(self, x: Tensor, mask: Tensor) -> Tensor:
+        bs, slen, nfeats = x.shape
+        mask_flat = mask.view(-1).bool()  # (B,T) -> (B*T,)
+
+        residual = x
+        x = x * self.scale_mhsa.to(x.dtype) + self.bias_mhsa.to(x.dtype)
+        x = residual + self.mhsa(x, attn_mask=mask)
+
+        # LayerNorm and the FFN are per-position, so gather the real rows into a fake
+        # batch of 1 rather than normalising pads. x_skip aliases x, so the write-back
+        # below restores the pad rows untouched.
+        x_skip = x.view(-1, x.shape[-1])
+        x = x_skip[mask_flat].unsqueeze(0)
+        x = self.ln_mhsa(x)
+
+        residual = x
+        x = x * self.scale_ff_mhsa.to(x.dtype) + self.bias_ff_mhsa.to(x.dtype)
+        x = residual + self.ff_mhsa(x)
+        x = self.ln_ff_mhsa(x)
+
+        x_skip[mask_flat] = x[0].to(x_skip.dtype)
+        x = x_skip.view(bs, slen, nfeats)
+
+        # The conv mixes across time, so it needs the padded layout back
+        residual = x
+        x = x * self.scale_conv.to(x.dtype) + self.bias_conv.to(x.dtype)
+        x = residual + self.conv(x, mask_pad=mask.bool().unsqueeze(1))
+
+        x_skip = x.view(-1, x.shape[-1])
+        x = x_skip[mask_flat].unsqueeze(0)
+        x = self.ln_conv(x)
+
+        residual = x
+        x = x * self.scale_ff_conv.to(x.dtype) + self.bias_ff_conv.to(x.dtype)
+        x = residual + self.ff_conv(x)
+        x = self.ln_ff_conv(x)
+
+        x_skip[mask_flat] = x[0].to(x_skip.dtype)
+        x = x_skip.view(bs, slen, nfeats)
+        return x
 
 
 # %%
