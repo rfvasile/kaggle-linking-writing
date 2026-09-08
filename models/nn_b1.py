@@ -13,7 +13,6 @@ from transformers import AutoConfig, AutoModel, DebertaV2Model
 from configs.cfg_b1 import cfg
 from data.ds_b1 import CustomDataset
 from models.squeezeformer import ConvModule, FeedForwardModule, make_scale
-from models.squeezeformer.model import Squeezeformer
 
 # Equivalent of %autoreload
 watch(".")
@@ -388,7 +387,17 @@ class Net(nn.Module):
         config = AutoConfig.from_pretrained(cfg.backbone, **cfg.backbone_cfg)
         self.deberta: DebertaV2Model = AutoModel.from_pretrained(cfg.backbone, config=config)
         self.feats_extractor = FeatureExtractor(in_feats=cfg.in_feats, out_feats=cfg.out_feats, ksize=cfg.ksize)
-        self.squeezeformer = Squeezeformer()
+        # Hyperparameters follow the reference `3rd place solution
+        self.squeezeformer = SqueezeformerBlock(
+            cfg,
+            encoder_dim=cfg.out_feats,  # the stem's width is what feeds the block
+            num_attention_heads=cfg.num_heads,
+            feed_forward_expansion_factor=1,
+            conv_expansion_factor=2,
+            feed_forward_dropout_p=0.0,
+            conv_dropout_p=0.0,
+            conv_kernel_size=31,
+        )
         self.fc = nn.Linear(1024, 1)
         self.criterion = nn.MSELoss()
 
@@ -408,11 +417,11 @@ class Net(nn.Module):
         out_deb = self.deberta(input_ids=batch["input_deb"], attention_mask=batch["attention_mask"])
 
         # Stem: (BxTx3) -> (BxTx256)
-        out_fe = self.feats_extractor(feats=batch["input_sf"], attention_mask=batch["attention_mask"])
+        out_fe = self.feats_extractor(batch["input_sf"], batch["attention_mask"])
 
-        # Squeeze former: (B,T,3) -> (B,T,256)
-        out_sq = self.squeezeformer(feats=out_fe, attention_mask=batch["attention_mask"])
-        assert out_sq.shape == (2, 3, 256)
+        # Squeezeformer: (B,T,256) -> (B,T,256)
+        out_sq = self.squeezeformer(out_fe, batch["attention_mask"])
+        assert out_sq.shape == out_fe.shape  # preserves (B,T,C)
 
         # Concatenate
         composed = concat((out_deb.last_hidden_state, out_sq), dim=2)
@@ -430,8 +439,10 @@ class Net(nn.Module):
 
 # %%
 batch = torch.rand((2, 64, 256))
-input_length = torch.full((2,), 64)
-net = Squeezeformer(input_dim=256)
-out, _ = net(batch, input_length)
+mask = torch.zeros((2, 64), dtype=torch.long)
+mask[0, :50] = 1
+mask[1, :64] = 1
+net = SqueezeformerBlock(cfg, encoder_dim=256)
+out = net(batch, mask)
 
 out.shape

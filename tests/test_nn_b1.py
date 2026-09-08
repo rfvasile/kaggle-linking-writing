@@ -9,7 +9,7 @@ from torch.utils.data import DataLoader
 
 from configs.cfg_b1 import cfg
 from data.ds_b1 import CustomDataset, collate_fn
-from models.nn_b1 import Attention, AttentionBlock, FeatureExtractor, Net, SqueezeFormer
+from models.nn_b1 import Attention, AttentionBlock, FeatureExtractor, Net, SqueezeformerBlock
 
 mode = "train"
 
@@ -26,20 +26,41 @@ def dsl():
     return dsl
 
 
-def test_net_forward(dsl: DataLoader):
+def test_net_produces_one_prediction_per_item(dsl: DataLoader):
     batch = next(iter(dsl))
     net = Net(batch, cfg, mode=mode)
     out = net(batch)
-    assert out.shape == 3 and out.shape[2] == 256
+    assert out["preds"].shape == (batch["input_deb"].shape[0],)
 
 
-def test_sf_forward(dsl: DataLoader):
-    batch = next(iter(dsl))
-    net = SqueezeFormer(cfg)
-    out = net(batch)
+def test_squeezeformer_block_preserves_input_shape():
+    x = torch.rand(2, 20, 256)
+    mask = torch.ones(2, 20, dtype=torch.long)
+    mask[1, 15:] = 0
+
+    blk = SqueezeformerBlock(cfg, encoder_dim=256, num_attention_heads=4)
+    out = blk(x, mask)
+    assert out.shape == (2, 20, 256)
 
 
-def test_feature_extractor_experiment():
+def test_squeezeformer_block_ignores_pad_contents():
+    """Real positions must not see what sits in the pad slots."""
+    x = torch.rand(2, 20, 256)
+    mask = torch.ones(2, 20, dtype=torch.long)
+    mask[1, 15:] = 0
+
+    blk = SqueezeformerBlock(cfg, encoder_dim=256, num_attention_heads=4).eval()
+    before = blk(x, mask)
+
+    x2 = x.clone()
+    x2[1, 15:] = 99.0  # scribble over the pads only
+    after = blk(x2, mask)
+
+    assert torch.allclose(before[0], after[0], atol=1e-5)
+    assert torch.allclose(before[1, :15], after[1, :15], atol=1e-5)
+
+
+def test_feature_extractor_runs_on_ragged_batch():
     # Feature extractor experiment
     x2 = torch.randn(2, 20, 3)  # BxTxF
     mask = torch.ones(2, 20)
@@ -51,7 +72,7 @@ def test_feature_extractor_experiment():
     print(out.shape)
 
 
-def test_attention_experiment():
+def test_qk_scores_permute_with_the_time_axis():
     # ---------------------
     # ----- Attention -----
     # ---------------------
@@ -99,7 +120,7 @@ def test_attention_experiment():
     torch.softmax(scores1, dim=1).sum(dim=1)
 
 
-def test_attention_rope_experiment():
+def test_rope_makes_attention_order_sensitive():
     cfg.apply_RoPE = True
     cfg.slow_RoPE = False
     # Attention smoke test
@@ -119,7 +140,7 @@ def test_attention_rope_experiment():
     )
 
 
-def test_attention_mask_invariance_with_extractor():
+def test_attention_block_ignores_pad_contents_from_extractor():
     batch = torch.rand((2, 10, 3))
     mask = torch.ones((2, 10))
     extr = FeatureExtractor(in_feats=3, out_feats=256, ksize=9)
@@ -137,7 +158,7 @@ def test_attention_mask_invariance_with_extractor():
     )
 
 
-def test_attention_block():
+def test_attention_block_shape_padding_and_order_sensitivity():
     x = torch.rand(2, 10, 256)
     mask = torch.ones(2, 10)
     mask[1, 8:] = 0
@@ -169,7 +190,7 @@ def test_attention_block():
     not Path("datamount/train_folds.parquet").exists(),
     reason="datamount/*.parquet is gitignored, so the file is absent in CI",
 )
-def test_net_experiment():
+def test_net_produces_one_prediction_per_item_through_collate_fn():
     df = pd.read_parquet("datamount/train_folds.parquet")
     ds = CustomDataset(df=df, cfg=cfg, mode="train")
     loader = DataLoader(dataset=ds, collate_fn=collate_fn, batch_size=2)
