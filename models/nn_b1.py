@@ -5,7 +5,6 @@ from typing import Any, Literal
 
 import pandas as pd
 import torch
-from jurigged import watch
 from torch import Tensor, concat, nn
 from torch.utils.data import DataLoader
 from transformers import AutoConfig, AutoModel, DebertaV2Model
@@ -15,7 +14,7 @@ from data.ds_b1 import CustomDataset
 from models.squeezeformer import ConvModule, FeedForwardModule, make_scale
 
 # Equivalent of %autoreload
-watch(".")
+# watch(".")
 
 mode = "train"
 ds = pd.read_parquet("datamount/train_folds5.parquet")
@@ -385,7 +384,7 @@ class Net(nn.Module):
         self.mode = mode
 
         config = AutoConfig.from_pretrained(cfg.backbone, **cfg.backbone_cfg)
-        self.deberta: DebertaV2Model = AutoModel.from_pretrained(cfg.backbone, config=config)
+        self.deberta: DebertaV2Model = AutoModel.from_pretrained(cfg.backbone, config=config, dtype=torch.float32)
         self.feats_extractor = FeatureExtractor(in_feats=cfg.in_feats, out_feats=cfg.out_feats, ksize=cfg.ksize)
         # Hyperparameters follow the reference `3rd place solution
         self.squeezeformer = SqueezeformerBlock(

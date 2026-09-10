@@ -88,7 +88,7 @@ def calc_grad_norm(parameters, norm_ord=2) -> torch.Tensor | None:
     if not grads:
         return None
     total_norm = torch.linalg.vector_norm(
-        torch.stack([torch.linalg.vector_norm(g.detach(), norm_ord=norm_ord) for g in grads]), norm_ord=norm_ord
+        torch.stack([torch.linalg.vector_norm(g.detach(), ord=norm_ord) for g in grads]), ord=norm_ord
     )
     if total_norm.isnan() or total_norm.isinf():
         return None
