@@ -73,6 +73,7 @@ run = wandb.init(
 modules = [args.config] + [getattr(cfg, s) for s in "dataset model post_process_pipeline metric".split()]
 rel_paths = sum([glob.glob(f"./*/{file.split('.')[-1]}.py") for file in modules], [])
 abs_paths = [os.path.abspath(path) for path in rel_paths]
+abs_paths.append(os.path.abspath(__file__))
 run.log_code(root=".", include_fn=lambda file, _: file in abs_paths)
 
 # Wandb metrics (c)
@@ -142,6 +143,9 @@ for epoch in range(cfg.epochs):
     progress_bar = tqdm(range(len(train_dataloader)), desc=f"Train epoch {epoch}")
     tr_it = iter(train_dataloader)
     losses = []
+    epoch_loss_sum = 0.0
+    epoch_squared_error = 0.0
+    epoch_samples = 0
     gc.collect()
 
     # Train
@@ -160,6 +164,10 @@ for epoch in range(cfg.epochs):
             output = model(batch)
         loss = output["loss"]
         losses.append(loss.item())
+        batch_size = batch["target"].numel()
+        epoch_loss_sum += loss.item() * batch_size
+        epoch_squared_error += (output["preds"].detach().float() - batch["target"].float()).square().sum().item()
+        epoch_samples += batch_size
         progress_bar.set_postfix(loss=np.mean(losses[-10:]))
 
         ## Accumulate scaled gradients (the logs use the unscaled value)
@@ -190,6 +198,18 @@ for epoch in range(cfg.epochs):
             log_dict["total_grad_norm_after_clip"] = total_grad_norm_after_clip.item()
         run.log({**log_dict, "curr_step": cfg.curr_step})
 
+    epoch_metrics = {
+        "train/loss_epoch": epoch_loss_sum / epoch_samples,
+        "train/rmse_epoch": (epoch_squared_error / epoch_samples) ** 0.5,
+        "epoch": epoch,
+        "curr_step": cfg.curr_step,
+    }
+    run.log(epoch_metrics)
+    print(
+        f"train_loss_epoch: {epoch_metrics['train/loss_epoch']:.6f}, "
+        f"train_rmse_epoch: {epoch_metrics['train/rmse_epoch']:.6f}"
+    )
+
     # Validation
     if (epoch + 1) % cfg.eval_epochs == 0 or (epoch + 1) == cfg.epochs:
         ## Init data
@@ -205,7 +225,9 @@ for epoch in range(cfg.epochs):
 
             ### Save the results
             for key, val in output.items():
-                val_data[key].append(val)
+                val_data[key].append(val.detach().cpu())
+            for key in ("target", "idx"):
+                val_data[key].append(batch[key].detach().cpu())
 
         ## make uniform data
         for key, val in val_data.items():

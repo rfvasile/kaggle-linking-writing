@@ -3,10 +3,8 @@ import math
 from types import SimpleNamespace
 from typing import Any, Literal
 
-import pandas as pd
 import torch
 from torch import Tensor, concat, nn
-from torch.utils.data import DataLoader
 from transformers import AutoConfig, AutoModel, DebertaV2Model
 
 from configs.cfg_b1 import cfg
@@ -16,10 +14,10 @@ from models.squeezeformer import ConvModule, FeedForwardModule, make_scale
 # Equivalent of %autoreload
 # watch(".")
 
-mode = "train"
-ds = pd.read_parquet("datamount/train_folds5.parquet")
-dsw = CustomDataset(ds, cfg, mode=mode)
-dsl: DataLoader = DataLoader(dsw)
+# mode = "train"
+# ds = pd.read_parquet("datamount/train_folds5.parquet")
+# dsw = CustomDataset(ds, cfg, mode=mode)
+# dsl: DataLoader = DataLoader(dsw)
 
 
 # %%
@@ -437,11 +435,11 @@ class Net(nn.Module):
 
 
 # %%
-batch = torch.rand((2, 64, 256))
-mask = torch.zeros((2, 64), dtype=torch.long)
-mask[0, :50] = 1
-mask[1, :64] = 1
-net = SqueezeformerBlock(cfg, encoder_dim=256)
-out = net(batch, mask)
+# batch = torch.rand((2, 64, 256))
+# mask = torch.zeros((2, 64), dtype=torch.long)
+# mask[0, :50] = 1
+# mask[1, :64] = 1
+# net = SqueezeformerBlock(cfg, encoder_dim=256)
+# out = net(batch, mask)
 
-out.shape
+# out.shape
